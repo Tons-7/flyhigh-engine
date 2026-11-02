@@ -2,9 +2,9 @@
 // FhStream (frames with timestamps in, intervals out) and FhPacer (what to present on each tick, what to generate),
 // with the browser adapters (adapters.js) for what each browser does differently. Everything a host has to do is in
 // this file: source frames in, ticks in, frames out. It is the template for a player or an extension and the bench
-// for browser findings (docs/design/04-host-adapters.md).
-import init, * as fh from '../../web/pkg/flyhigh_web.js';
-import { pacerDefaults, ReadbackNudge, warmUp, VideoSource, CanvasPresenter, TickSource, CostSampler } from '../../web/pkg/adapters.js';
+// for browser findings (ARCHITECTURE.md).
+import init, * as fh from './pkg/flyhigh_web.js';
+import { pacerDefaults, ReadbackNudge, warmUp, VideoSource, CanvasPresenter, TickSource, CostSampler } from './pkg/adapters.js';
 
 const $ = (id) => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), status = $('status');

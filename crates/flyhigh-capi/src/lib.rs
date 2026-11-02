@@ -1,4 +1,4 @@
-//! C ABI of the engine for hosts that are not Rust (C / C++ / C# / Python): the layers (docs/design/00-overview.md) behind opaque
+//! C ABI of the engine for hosts that are not Rust (C / C++ / C# / Python): the layers (ARCHITECTURE.md) behind opaque
 //! handles. Built as `flyhigh.dll` / `libflyhigh.so` / `libflyhigh.dylib` (and a static library); the header is
 //! `include/flyhigh.h`, the guide `docs/api-c.md`. Single-threaded use per handle. Errors: a call returns null or -1
 //! and `fh_last_error` holds the message.

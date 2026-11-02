@@ -22,9 +22,9 @@ Parity: the v6p golden (`fixtures/v6p`, K 2, t 0.5), flow L1 in network pixels a
 
 | Browser | Date | Kernel class | Result | Notes |
 |---|---|---|---|---|
-| Chrome 156 (Windows, D3D12 underneath) | 2026-11-02 | `portable-f16` (shader-f16, timestamp-query, bgra8unorm-storage, subgroups) | the reference web host: 95 presents/s at Auto from 24 fps anime, no drops, no penalties; the extension's recorded session replays in the tests (`tests/traces/chrome-anime-auto.json`) | all kernels compile in 1.8 s in parallel |
+| Chrome 156 (Windows, D3D12 underneath) | 2026-11-02 | `portable-f16` (shader-f16, timestamp-query, bgra8unorm-storage, subgroups) | the reference web host: 95 presents/s at Auto from 24 fps anime, no drops, no penalties; the extension's recorded session replays in the tests (`crates/flyhigh-engine/tests/traces/chrome-anime-auto.json`) | all kernels compile in 1.8 s in parallel |
 | Edge | | the same engine as Chrome | not measured separately | |
-| Firefox 159 (Windows) | 2026-11-02 | `portable-f16` (shader-f16, timestamp-query, bgra8unorm-storage; no subgroups) | the reference web host: 97 presents/s at Auto, a minute without a compositor stall (`tests/traces/firefox-refhost-auto.json`) | three host rules, all in the engine or its adapter: presents at least 7 ms apart (the compositor stalls 40 to 90 ms below that; the Pacer option `min_present_interval_ms`), kernels warmed up before playback (pipelines compile serially in the GPU process, 0.1 to 2 s each), an empty submit every millisecond while a readback is pending (mapAsync resolves only on GPU polls, 70 to 100 ms otherwise). `copyExternalImageToTexture` rejects `<video>`: the host blits through `importExternalTexture` |
+| Firefox 159 (Windows) | 2026-11-02 | `portable-f16` (shader-f16, timestamp-query, bgra8unorm-storage; no subgroups) | the reference web host: 97 presents/s at Auto, a minute without a compositor stall (`crates/flyhigh-engine/tests/traces/firefox-refhost-auto.json`) | three host rules, all in the engine or its adapter: presents at least 7 ms apart (the compositor stalls 40 to 90 ms below that; the Pacer option `min_present_interval_ms`), kernels warmed up before playback (pipelines compile serially in the GPU process, 0.1 to 2 s each), an empty submit every millisecond while a readback is pending (mapAsync resolves only on GPU polls, 70 to 100 ms otherwise). `copyExternalImageToTexture` rejects `<video>`: the host blits through `importExternalTexture` |
 | Safari 26 | | | not measured (needs a Mac) | |
 
 ## Interop
@@ -49,4 +49,4 @@ sh tools/fetch_dxc.sh target/release                 # Windows, DX12: the DXC DL
 ```
 
 The browser numbers come from the reference web host (`examples/web/`) driven by the harness described in
-[development.md](development.md); the recorded sessions in `tests/traces/` replay in `cargo test`.
+[development.md](development.md); the recorded sessions in `crates/flyhigh-engine/tests/traces/` replay in `cargo test`.

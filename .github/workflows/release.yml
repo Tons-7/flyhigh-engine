@@ -72,9 +72,9 @@ jobs:
           set -e
           d=flyhigh-${GITHUB_REF_NAME}-web
           mkdir -p "$d/pkg" "$d/models" "$d/example"
-          cp web/pkg/flyhigh_web.js web/pkg/flyhigh_web_bg.wasm web/pkg/flyhigh_web.d.ts web/pkg/adapters.js "$d/pkg/"
+          cp examples/web/pkg/flyhigh_web.js examples/web/pkg/flyhigh_web_bg.wasm examples/web/pkg/flyhigh_web.d.ts examples/web/pkg/adapters.js "$d/pkg/"
           cp models/graph.json models/flyhighfg.json models/flyhighfg.bin models/models.json models/WEIGHTS_LICENSE.md "$d/models/"
-          cp examples/web/index.html examples/web/main.js examples/web/README.md "$d/example/"
+          cp examples/examples/web/parity.html examples/web/main.js examples/web/README.md "$d/example/"
           cp docs/api-js.md "$d/API.md"
           cp LICENSE NOTICE README.md "$d/"
           tar czf "$d.tar.gz" "$d"

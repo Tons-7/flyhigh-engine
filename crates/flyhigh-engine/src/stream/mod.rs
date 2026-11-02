@@ -1,4 +1,4 @@
-//! The Stream (docs/design/02-stream.md): source frames with timestamps in, generatable intervals out. It owns the input ring and
+//! The Stream (ARCHITECTURE.md): source frames with timestamps in, generatable intervals out. It owns the input ring and
 //! the output slots, runs the pair stage when a frame arrives (at once in realtime mode, one frame behind in video
 //! mode), classifies each pair (scene cut, held frame, motion), keeps the cadence statistics and synthesises any
 //! phase of the current interval on request.
@@ -67,7 +67,7 @@ impl Default for HeldFrames {
     }
 }
 
-/// How source frames with timestamps become generatable intervals (docs/design/02-stream.md); fixed when the stream opens. The
+/// How source frames with timestamps become generatable intervals (ARCHITECTURE.md); fixed when the stream opens. The
 /// session options travel beside them in `Stream::open`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Options)]
 #[serde(default, deny_unknown_fields)]
@@ -221,7 +221,7 @@ impl Stream {
         })
     }
 
-    /// The Stream of `model` on `engine` with the session options (docs/design/01-core.md) (the mode fields come from `opts`).
+    /// The Stream of `model` on `engine` with the session options (ARCHITECTURE.md) (the mode fields come from `opts`).
     pub fn open(engine: &Engine, model: &Model, session: &SessionOptions, opts: &StreamOptions) -> Result<Stream> {
         session.validate()?;
         Stream::new(engine.gpu(), model.blob(), model.ops(), session.tex_options(), opts, session.tune.as_ref())

@@ -54,7 +54,7 @@ fn err(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
-/// The scheduler between a video's frames and the display's ticks (docs/design/03-pacer.md). Per
+/// The scheduler between a video's frames and the display's ticks (ARCHITECTURE.md). Per
 /// `requestAnimationFrame`: `tick(now)`, present what it says, generate its requests through the generator and
 /// `generated(now, id, outputSlot)` each. Per video frame, once its kind is known: `sourceFrame(now, frame)`,
 /// generate the requests it returns, then push the frame.

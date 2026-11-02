@@ -4,7 +4,7 @@ dist/
 *.exe
 *.engine
 # the browser module is built by tools/build_web.sh (CI publishes it as an artifact)
-web/pkg/
+examples/web/pkg/
 
 # model weight blobs: the shipped model is the one exception; alternate checkpoints (models_v5/ ...) are local
 *.bin

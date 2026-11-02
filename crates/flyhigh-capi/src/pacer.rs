@@ -7,7 +7,7 @@ use std::ffi::c_char;
 
 /// Options for `fh_pacer_create`; start from `fh_pacer_options_default()`. `mode` 0 auto, 1 a fixed `factor` (1..6),
 /// 2 the display's rate, 3 `target_fps`; `fps_limit` 0 = none. Every other field is the Rust option of the same name
-/// (docs/design/03-pacer.md), flags as 0 / 1.
+/// (ARCHITECTURE.md), flags as 0 / 1.
 #[repr(C)]
 pub struct FhPacerOptions {
     pub mode: u32,

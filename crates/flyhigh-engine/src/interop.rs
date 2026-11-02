@@ -1,4 +1,4 @@
-//! External texture interop (docs/design/04-host-adapters.md): textures another API produced, imported into the engine's device without a
+//! External texture interop (ARCHITECTURE.md): textures another API produced, imported into the engine's device without a
 //! copy, so a capture or a game hands frames over on the GPU. Windows: a D3D11 texture shared through an NT handle
 //! (`D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE`, `IDXGIResource1::CreateSharedHandle`) into
 //! the Vulkan device through `VK_KHR_external_memory_win32`. The engine requests that feature whenever the adapter

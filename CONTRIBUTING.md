@@ -7,8 +7,7 @@ and where to start.
 ## Before you start
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) is the map: the layers, the modules, the network, the plans, the kernels.
-- [docs/design/](docs/design/README.md) holds the public API as designed; a change to the public API starts there.
-- [docs/decisions/](docs/decisions/README.md) records the decisions already taken, with their reasons.
+- [docs/decisions.md](docs/decisions.md) records the decisions already taken, with their reasons.
 - An issue before a large change saves both sides time. Small fixes and documentation can go straight to a pull
   request.
 
@@ -20,7 +19,7 @@ tests; the GPU tests run on any wgpu backend, in CI on lavapipe (software Vulkan
 
 ```
 cargo build --release                 # engine, C library, CLI, example player
-sh tools/build_web.sh                 # browser module into web/pkg
+sh tools/build_web.sh                 # browser module into examples/web/pkg
 ```
 
 Details, the CLI commands and the developer environment variables: [docs/development.md](docs/development.md).
@@ -55,12 +54,12 @@ Two checks need an eye rather than a command:
 These are the rules the engine is built under; a pull request that follows them is easy to review.
 
 1. **Behaviour changes only with tests.** A kernel or plan change comes with the golden plans and the parity; a Pacer
-   change with a trace test (`tests/traces/`); a Stream change with a GPU test; an option with its validation test.
+   change with a trace test (`crates/flyhigh-engine/tests/traces/`); a Stream change with a GPU test; an option with its validation test.
 2. **Every heuristic is an option.** A threshold, a window, a default factor: it is a field of the layer's options
    struct with a default, a doc comment (the reference is generated from it, so a field without one does not compile)
    and a field in the report that says what the engine decided. Nothing silent inside a layer.
-3. **The public API starts as a design document.** A new call, option or report field is written into the relevant
-   document under `docs/design/` first, as the target; the code follows and the document is updated to say what exists.
+3. **The public API starts in the documentation.** A new call, option or report field is written into
+   `ARCHITECTURE.md` and the API guide first, as the target; the code follows.
 4. **Each layer uses only the public API of the layer below.** The Pacer knows no textures, the Stream no clocks.
 5. **Numbers come with their setup.** A measurement in a doc or a commit message names the GPU, the backend, the
    resolution and the date; the platforms matrix and the baselines are the reference.
@@ -94,16 +93,18 @@ Work that is well bounded, documented and verifiable without special hardware or
   `shaders/keep_static_age*.wgsl`).
 - Buffer pool reuse across sessions on one engine (`gpu/alloc.rs`).
 - Doxygen (or any) reference generated from `crates/flyhigh-capi/include/flyhigh.h`.
-- TypeScript types for the JavaScript classes generated from `OptionInfo` (design 07).
+- TypeScript types for the JavaScript classes generated from `OptionInfo`.
+- Typed error variants with codes across the three surfaces (`anyhow` in Rust today, a message in C and JavaScript).
+- Named presets across the layers (quality, balanced, performance, low-end, game, anime) as data with a generated table.
 - A cookbook recipe: a short, runnable host for one case (offline video processing, a capture plugin skeleton).
-- A Pacer trace from a host or display not yet in `tests/traces/` (a 120 Hz or 144 Hz panel, a laptop iGPU),
+- A Pacer trace from a host or display not yet in `crates/flyhigh-engine/tests/traces/` (a 120 Hz or 144 Hz panel, a laptop iGPU),
   recorded with the reference web host and added as a replay test.
 
 ## Releasing
 
 Versions follow semantic versioning. Before 1.0 a minor version (0.x) may change the Rust API; the C ABI and the
 JavaScript classes change additively within a minor, and a replaced call stays one release beside its
-replacement. From 1.0 the three surfaces are stable within a major version; design 07 holds the
+replacement. From 1.0 the three surfaces are stable within a major version; ARCHITECTURE.md holds the
 surface mapping and the parity test between them.
 
 Checklist for a release:

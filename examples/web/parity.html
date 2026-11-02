@@ -61,9 +61,9 @@ async function run(A, B, R) {
     const t0 = performance.now();
     engine = await FhEngine.create({});
     const [bin, man, graph] = await Promise.all([
-      fetch("../models/flyhighfg.bin").then(r => r.arrayBuffer()),
-      fetch("../models/flyhighfg.json").then(r => r.text()),
-      fetch("../models/graph.json").then(r => r.text())]);
+      fetch("../../models/flyhighfg.bin").then(r => r.arrayBuffer()),
+      fetch("../../models/flyhighfg.json").then(r => r.text()),
+      fetch("../../models/graph.json").then(r => r.text())]);
     model = engine.loadModel(graph, man, new Uint8Array(bin));
     log(`device: ${JSON.stringify(engine.info())}`);
     log(`model: ${JSON.stringify(model.info())}, loaded in ${(performance.now() - t0).toFixed(0)} ms (${(bin.byteLength / 1e6).toFixed(2)} MB f16)`);

@@ -316,7 +316,7 @@ fn trace_json_round_trips() {
 }
 
 fn recorded(name: &str) -> Trace {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/traces/");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/traces/");
     let text = std::fs::read_to_string(format!("{path}{name}.json")).expect("the recorded trace");
     Trace::from_json(&text).expect("trace v1")
 }
@@ -375,7 +375,7 @@ fn recorded_player_session_replays_to_the_report_the_host_wrote() {
     let trace = recorded("player-anime-auto");
     let opts = trace.options.clone().expect("the host recorded its options");
     let r = replay(&trace, &opts).unwrap();
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/traces/player-anime-auto.report.json");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/traces/player-anime-auto.report.json");
     let written = std::fs::read_to_string(path).expect("the report the player wrote");
     assert_eq!(r.report.to_json(), written);
     assert!(r.report.pair_cost_ms > 0.0 && r.report.mid_cost_ms > 0.0, "costs came from timestamp queries");

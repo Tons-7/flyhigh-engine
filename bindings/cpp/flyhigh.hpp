@@ -170,7 +170,7 @@ private:
     uint32_t w_, hgt_;
 };
 
-/// Frames with timestamps in, intervals out (docs/design/02-stream.md).
+/// Frames with timestamps in, intervals out (ARCHITECTURE.md).
 class Stream {
 public:
     static FhStreamOptions options() { return fh_stream_options_default(); }
@@ -221,7 +221,7 @@ private:
     uint32_t w_, hgt_;
 };
 
-/// What to present on this display tick and what to generate (docs/design/03-pacer.md); milliseconds of the host's
+/// What to present on this display tick and what to generate (ARCHITECTURE.md); milliseconds of the host's
 /// monotonic clock.
 class Pacer {
 public:

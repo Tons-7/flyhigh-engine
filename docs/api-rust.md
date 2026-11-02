@@ -1,6 +1,6 @@
 # Rust API
 
-The crate is `flyhigh-engine` (`crates/flyhigh-engine/`). The public API has four layers (design 00): the Core
+The crate is `flyhigh-engine` (`crates/flyhigh-engine/`). The public API has four layers: the Core
 (`Engine`, `Model`, `Session`: two frames in, one frame at phase `t` out), the Stream (frames with timestamps in,
 intervals out), the Pacer (what to present on this display tick and what to generate for the coming ones) and the
 hosts' own glue. Enter at the level you need. All options and their defaults: [options.md](options.md).
@@ -68,7 +68,7 @@ match stream.generate(engine.gpu(), 0.5, out)? { Generated::Written => present(o
 off), `inputs` / `outputs` created up front. `push_timed` and `generate_timed` do the same work under timestamp
 queries and return the `TimedRun` to await (`block(gpu)` natively) for the GPU milliseconds the Pacer's
 `cost_sample` takes. `stream.report()` counts pushes, pairs, mids, classifications. Details:
-[design 02](design/02-stream.md).
+[ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Pacer
 
@@ -89,7 +89,7 @@ let flush = pacer.source_frame(now, SourceFrame { id: slot, pts_ms, kind, motion
 `pacer.cost_sample(now, Stage::Mid, ms)` feeds measured GPU times, `mode_change` opens the settle window after a
 fullscreen change, `reset` forgets the history on a seek, `report()` says what was decided, measured and dropped and
 why; `record(host)` makes the pacer record every call from then on as a `trace v1` (`trace()`, `stop_recording()`)
-that `pacer::trace::replay` reproduces bit for bit. Every heuristic is an option of `PacerOptions` with the default in [design 03](design/03-pacer.md). `pacer::trace`
+that `pacer::trace::replay` reproduces bit for bit. Every heuristic is an option of `PacerOptions` with the default in [ARCHITECTURE.md](../ARCHITECTURE.md). `pacer::trace`
 records and replays sessions (`flyhigh-dev replay`). `examples/player` is the whole loop in one file.
 
 ## CPU convenience: `api::Engine` and `api::Generator`

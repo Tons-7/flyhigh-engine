@@ -30,7 +30,7 @@ At 24 fps that is about 21 ms (realtime) and about 63 ms (video). Players hide i
 ## Presenting and pacing
 
 The Pacer does this for you: feed it the display ticks, the source frames with their timestamps and kinds, and the
-measured GPU costs; present what it says and generate what it asks for ([design 03](design/03-pacer.md)). A host that
+measured GPU costs; present what it says and generate what it asks for ([ARCHITECTURE.md](../ARCHITECTURE.md)). A host that
 paces itself follows the same rules:
 
 - Ask for the phases you want per source interval: factor 2 is t = 0.5; factor 3 is t = 1/3, 2/3; any t in (0, 1)

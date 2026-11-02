@@ -1,5 +1,5 @@
 //! Engine-wide options (`EngineOptions`, `Precision`), per-network options (`NetOpts`) and their defaults; the option
-//! declarations' reference (`OptionInfo`, `groups`) behind `#[derive(Options)]` (docs/design/05-options-and-report.md).
+//! declarations' reference (`OptionInfo`, `groups`) behind `#[derive(Options)]` (ARCHITECTURE.md).
 
 use crate::Blob;
 pub use flyhigh_options::Options;

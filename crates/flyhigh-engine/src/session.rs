@@ -1,4 +1,4 @@
-//! `Session`: the plans of one model on one engine for one frame size (docs/design/01-core.md). Two frames in, one frame at phase
+//! `Session`: the plans of one model on one engine for one frame size (ARCHITECTURE.md). Two frames in, one frame at phase
 //! `t` out, on textures the session owns or on views the host passes. No timestamps, no clocks, no decision about
 //! which interval or phase to generate: that is the Stream's and the Pacer's.
 use crate::gen_tex::{TexMode, TexOptions};

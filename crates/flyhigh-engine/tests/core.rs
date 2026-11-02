@@ -1,4 +1,4 @@
-// The Core API of design 01: options validate without a GPU; on a real GPU an Engine, a Model and a Session generate
+// The Core API: options validate without a GPU; on a real GPU an Engine, a Model and a Session generate
 // an in-between on their own slots, a host's own wgpu device drives the engine through `Engine::with_device`, and the
 // reports say what was built. GPU tests are ignored by default (`cargo test --release -- --ignored`).
 use flyhigh_engine::{Engine, EngineOptions, Internal, KernelClass, Model, Session, SessionOptions, StaticProtection};

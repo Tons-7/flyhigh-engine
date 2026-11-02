@@ -1,4 +1,4 @@
-// Host adapters for the browser (docs/design/04-host-adapters.md): what every WebGPU host needs around the engine's
+// Host adapters for the browser (ARCHITECTURE.md): what every WebGPU host needs around the engine's
 // classes and nothing the engine itself should know about: how a <video> gets into a slot in each browser, how a slot
 // gets onto a canvas, requestAnimationFrame as the Pacer's ticks, the readbacks Firefox sits on, the GPU cost samples
 // the Pacer learns from. A plain ES module, no build step; it is shipped next to flyhigh_web.js.

@@ -1,4 +1,4 @@
-//! `Engine`: the device the engine runs on, its compiled kernels and its autotune table (docs/design/01-core.md). One per device;
+//! `Engine`: the device the engine runs on, its compiled kernels and its autotune table (ARCHITECTURE.md). One per device;
 //! models and sessions share it. Create one, or bring the device an application already has.
 use crate::gpu::dxc::ShaderCompiler;
 use crate::{EngineOptions, Gpu};

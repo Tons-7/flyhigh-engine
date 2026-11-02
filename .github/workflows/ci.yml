@@ -75,7 +75,7 @@ jobs:
       - run: FLYHIGH_LIB=target/release/libflyhigh.so python3 bindings/python/test_flyhigh.py
 
   # The browser module: built for wasm32, bound with the wasm-bindgen CLI that matches Cargo.lock, published as an
-  # artifact (web/pkg is not in git).
+  # artifact (examples/web/pkg is not in git).
   wasm:
     name: browser module (wasm32)
     runs-on: ubuntu-latest
@@ -88,8 +88,8 @@ jobs:
       - run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
       - run: sh tools/build_web.sh
       # the size budget: 1.02 MB today with the size-first profile; a change that crosses this is a decision
-      - run: test "$(stat -c%s web/pkg/flyhigh_web_bg.wasm)" -lt 1300000
+      - run: test "$(stat -c%s examples/web/pkg/flyhigh_web_bg.wasm)" -lt 1300000
       - uses: actions/upload-artifact@v4
         with:
           name: web-pkg
-          path: web/pkg
+          path: examples/web/pkg

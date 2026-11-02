@@ -98,7 +98,7 @@ int          fh_session_warm_up(FhSession* session);                          /*
 int          fh_session_import_d3d11(FhSession* session, const FhEngine* engine, intptr_t handle, uint32_t width, uint32_t height);
 int          fh_session_report_json(const FhSession* session, char* buf, size_t cap);
 
-/* ---- Stream: frames with timestamps in, intervals out (docs/design/02-stream.md) ---- */
+/* ---- Stream: frames with timestamps in, intervals out (ARCHITECTURE.md) ---- */
 typedef struct FhStreamOptions {
     uint32_t mode;              /* 0 realtime (default), 1 video (one frame of lookahead) */
     uint32_t cadence;           /* video: 1 = re-time elements animated on 2s (anime) */
@@ -145,7 +145,7 @@ int          fh_stream_import_d3d11(FhStream* stream, const FhEngine* engine, in
 int          fh_stream_reset(FhStream* stream);                               /* seek, decoder gap */
 int          fh_stream_report_json(const FhStream* stream, char* buf, size_t cap);
 
-/* ---- Pacer: the engine's scheduler for a host with its own display loop (docs/design/03-pacer.md) ----
+/* ---- Pacer: the engine's scheduler for a host with its own display loop (ARCHITECTURE.md) ----
  * Pure logic, no clock: every call takes `now`, the host's monotonic milliseconds. Per display tick call
  * fh_pacer_tick, present what it says, generate the requests (fh_pacer_requests) through the stream and report
  * each with fh_pacer_generated. Per source frame, once its kind is known, call fh_pacer_source_frame, generate the

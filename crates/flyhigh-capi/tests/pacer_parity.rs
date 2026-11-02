@@ -29,7 +29,7 @@ fn options_round_trip_through_the_c_struct() {
 }
 
 fn recorded() -> Trace {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/traces/chrome-anime-auto.json");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../flyhigh-engine/tests/traces/chrome-anime-auto.json");
     Trace::from_json(&std::fs::read_to_string(path).expect("the recorded trace")).expect("trace v1")
 }
 

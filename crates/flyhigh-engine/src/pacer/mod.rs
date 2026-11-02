@@ -99,9 +99,9 @@ pub struct Tick {
     pub dropped: u32,
 }
 
-/// Every heuristic of the Pacer (docs/design/03-pacer.md) with its default: what to present on a display tick and what to generate
+/// Every heuristic of the Pacer (ARCHITECTURE.md) with its default: what to present on a display tick and what to generate
 /// for the coming ones. Times in milliseconds, rates in Hz. They may change live (`set_options`); the defaults are
-/// tuned on the recorded sessions in `tests/traces/`.
+/// tuned on the recorded sessions in `crates/flyhigh-engine/tests/traces/`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Options)]
 #[serde(default, deny_unknown_fields)]
 pub struct PacerOptions {

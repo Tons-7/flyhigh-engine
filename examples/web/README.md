@@ -5,12 +5,12 @@ browser adapters of `adapters.js` (shipped next to the module), in one file (`ma
 classify each pair, hand frames with their timestamps to the Pacer, feed it the display ticks, present what it says,
 generate what it asks for. It is the template for a player or an extension and the bench where browser findings are
 measured (the Firefox present spacing and readback nudge live here as host code, see
-[design 04](../../docs/design/04-host-adapters.md)).
+[ARCHITECTURE.md](../../ARCHITECTURE.md)).
 
 ## Run
 
 ```sh
-bash tools/build_web.sh            # web/pkg/ (not in git)
+bash tools/build_web.sh            # examples/web/pkg/ (not in git)
 python -m http.server 8000         # from the repository root
 # open http://localhost:8000/examples/web/?autoplay=1
 ```

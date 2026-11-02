@@ -4,12 +4,12 @@
 
 ```
 cargo build --release          # engine (crates/flyhigh-engine), C library (flyhigh-capi), CLI (flyhigh-cli), player
-sh tools/build_web.sh          # browser module (crates/flyhigh-web) into web/pkg, wasm-bindgen 0.2.129 (Cargo.lock)
+sh tools/build_web.sh          # browser module (crates/flyhigh-web) into examples/web/pkg, wasm-bindgen 0.2.129 (Cargo.lock)
 ```
 
-`web/pkg/` is not in git: build it after any change to the engine or `shaders/` (CI publishes it as the `web-pkg`
-artifact). Serve the repository root (`python -m http.server 8765 --bind 127.0.0.1`) and open `web/index.html`
-(the byte path in the browser, parity against a native `ref.png`) or `examples/web/index.html` (the reference host:
+`examples/web/pkg/` is not in git: build it after any change to the engine or `shaders/` (CI publishes it as the `web-pkg`
+artifact). Serve the repository root (`python -m http.server 8765 --bind 127.0.0.1`) and open `examples/web/parity.html`
+(the byte path in the browser, parity against a native `ref.png`) or `examples/examples/web/parity.html` (the reference host:
 a video element through the Stream and the Pacer).
 
 ## CLI (`target/release/flyhigh-dev`)
@@ -28,7 +28,7 @@ the options.
 | `texbench W H [--internal WxH] [--fast] [--linear] [--static] [--json]` | GPU time of the pair stage and of one generated frame on the texture path |
 | `phases <video> [--factor 4] [--max 240] [--fast] [--linear]` | PSNR per generated phase against the dropped frames of a high-frame-rate video |
 | `replay <trace.json>` | a recorded host trace through the Pacer: what it would present and generate, per second |
-| `options-doc [path] [--check]` | writes `docs/options.md` from the option declarations (`#[derive(Options)]`, design 05); `--check` exits 1 when the file is stale, which CI runs |
+| `options-doc [path] [--check]` | writes `docs/options.md` from the option declarations (`#[derive(Options)]`); `--check` exits 1 when the file is stale, which CI runs |
 
 `flyhigh-player <input> [factor=2] [realtime|video] [cadence] [repair=1] [k=1] [IWxIH] [fps=auto] [seconds=N]` plays
 any ffmpeg input in a window through the texture-path generator.

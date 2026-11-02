@@ -1,4 +1,4 @@
-//! The engine's layers as JavaScript classes (docs/design/07-surfaces.md): `FhEngine` (the device), `FhModel`, `FhSession` (two frames
+//! The engine's layers as JavaScript classes (ARCHITECTURE.md): `FhEngine` (the device), `FhModel`, `FhSession` (two frames
 //! in, one frame out), `FhStream` (frames with timestamps in, intervals out); `FhPacer` lives in pacer.rs. Options,
 //! infos and reports are plain objects with the JSON shapes of the Rust types; unknown option keys are rejected.
 //! The `fh_*` function families are the previous surface and stay for one release; do not mix them with the classes
@@ -393,7 +393,7 @@ impl FhSession {
     }
 }
 
-/// Frames with timestamps in, intervals out (docs/design/02-stream.md); the Pacer decides the phases and their times.
+/// Frames with timestamps in, intervals out (ARCHITECTURE.md); the Pacer decides the phases and their times.
 #[wasm_bindgen]
 pub struct FhStream {
     gpu: Rc<Gpu>,

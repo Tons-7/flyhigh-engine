@@ -558,7 +558,7 @@ class Tick:
 
 
 class Pacer:
-    """The scheduler between source frames and display ticks (docs/design/03-pacer.md). Pacer(mode="auto" | int |
+    """The scheduler between source frames and display ticks (ARCHITECTURE.md). Pacer(mode="auto" | int |
     "display_hz" | ("target", fps), **options) with the option names of PacerOptions; times are the host's
     monotonic milliseconds."""
 

@@ -1,6 +1,6 @@
 # JavaScript API (browser, WebGPU)
 
-`web/pkg/flyhigh_web.js` is a wasm-bindgen ES module built by `tools/build_web.sh` (not in git; rebuild:
+`examples/web/pkg/flyhigh_web.js` is a wasm-bindgen ES module built by `tools/build_web.sh` (not in git; rebuild:
 [development.md](development.md)). The engine's layers are classes: `FhEngine` (the device), `FhModel`, `FhSession`
 (two frames in, one frame out), `FhStream` (frames with timestamps in, intervals out) and `FhPacer` (what to present
 on each tick, what to generate). Options, infos and reports are plain objects with the JSON shapes of the Rust types;
@@ -91,7 +91,7 @@ every millisecond while one is pending (`device.queue.submit([])`) and it resolv
 
 ## `FhPacer`: what to present, what to generate
 
-The scheduler between a video's frames and the display's ticks ([design 03](design/03-pacer.md)). Pure logic with
+The scheduler between a video's frames and the display's ticks ([ARCHITECTURE.md](../ARCHITECTURE.md)). Pure logic with
 `performance.now()` as its clock.
 
 ```js
@@ -118,7 +118,7 @@ options in force; `trace()` reads it, `stopRecording()` ends and returns it: the
 ## Adapters (`adapters.js`)
 
 A plain ES module next to `flyhigh_web.js`, no build step. It holds what every WebGPU host needs around the classes
-and nothing the engine should know about ([design 04](design/04-host-adapters.md)):
+and nothing the engine should know about ([ARCHITECTURE.md](../ARCHITECTURE.md)):
 
 | Export | Does |
 |---|---|

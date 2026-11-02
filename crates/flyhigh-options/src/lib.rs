@@ -1,4 +1,4 @@
-//! `#[derive(Options)]` (docs/design/05-options-and-report.md): one declaration per option. The field's doc comment is its description, the
+//! `#[derive(Options)]` (ARCHITECTURE.md): one declaration per option. The field's doc comment is its description, the
 //! instance `describe` is called on gives its default, and `#[option(...)]` adds what the type cannot say:
 //!
 //! ```text

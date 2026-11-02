@@ -66,11 +66,11 @@ if (fh_stream_generate(st, engine, 0.5f, out) == 1) present_output(out); else pr
 `FhStreamOptions`: `mode` (0 realtime, 1 video with one frame of lookahead), `cadence`, `scene_cut` (the threshold;
 0 = never), `held_frames` with `held_mean` / `held_max`, `inputs` / `outputs` created up front. `fh_stream_generate`
 returns 1 written, 0 the source frame is enough (t = 0 without re-timing). `fh_stream_read_rgba`, `fh_stream_warm_up`,
-`fh_stream_reset` (seek, decoder gap), `fh_stream_report_json`. Details: [design 02](design/02-stream.md).
+`fh_stream_reset` (seek, decoder gap), `fh_stream_report_json`. Details: [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Pacer (`fh_pacer_*`)
 
-The engine's scheduler for a host with its own display loop ([design 03](design/03-pacer.md)): pure logic, no clock,
+The engine's scheduler for a host with its own display loop ([ARCHITECTURE.md](../ARCHITECTURE.md)): pure logic, no clock,
 every call takes `now` in the host's monotonic milliseconds.
 
 ```c
