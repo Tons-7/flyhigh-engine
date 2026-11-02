@@ -7,6 +7,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-3b82f6?style=flat-square)](LICENSE)
 [![Weights: CC BY-NC 4.0](https://img.shields.io/badge/weights-CC%20BY--NC%204.0-7c3aed?style=flat-square)](models/WEIGHTS_LICENSE.md)
 [![Releases](https://img.shields.io/badge/releases-page-444?style=flat-square)](https://github.com/getflyhigh/flyhigh-engine/releases)
+[![Built on FlyHigh](https://img.shields.io/badge/built%20on-FlyHigh-19c37d?style=flat-square)](https://github.com/topics/flyhigh-engine)
+[![Ko-fi](https://img.shields.io/badge/support-ko--fi-ff5e5b?style=flat-square)](https://ko-fi.com/monzikxd)
 [![Compute by CloudRift](assets/cloudrift.svg)](https://cloudrift.ai)
 
 [**Documentation**](docs/README.md) / [Integration guide](docs/integration.md) /
@@ -105,7 +107,7 @@ fh_session_read_rgba(s, out, rgba, 1920 * 1080 * 4);
 <details>
 <summary><b>Browser (WebGPU)</b></summary>
 
-Serve `web/pkg/` (built by `sh tools/build_web.sh`) and `models/` with your page.
+Serve `examples/web/pkg/` (built by `sh tools/build_web.sh`) and `models/` with your page.
 
 ```js
 import init, * as fh from './pkg/flyhigh_web.js';
@@ -171,7 +173,7 @@ target/release/flyhigh-dev                                   # kernel self-tests
 target/release/flyhigh-dev frames A.png B.png out.png        # one generated frame between two images
 target/release/flyhigh-dev play in.mp4 out.mp4 --factor 2    # any video through the API, via ffmpeg
 target/release/flyhigh-player in.mp4 2                       # windowed playback with frame generation
-sh tools/build_web.sh                                        # browser module into web/pkg (wasm-bindgen 0.2.129)
+sh tools/build_web.sh                                        # browser module into examples/web/pkg (wasm-bindgen 0.2.129)
 ```
 
 Tests, CLI tools, developer settings: [development](docs/development.md). How the engine is put together:
@@ -193,10 +195,18 @@ Tests, CLI tools, developer settings: [development](docs/development.md). How th
 | `shaders/` | all WGSL kernels, one copy for every target |
 | `models/` | the model: `graph.json`, the `flyhighfg.json` manifest, the f16 weights `flyhighfg.bin` |
 | `bench/` | per-GPU performance and quality baselines |
-| `docs/` | [documentation](docs/README.md), the [design documents](docs/design/README.md) and the [decision records](docs/decisions/README.md) |
+| `docs/` | [documentation](docs/README.md) and the [decision records](docs/decisions.md) |
 
-Status: 0.x. The Rust API follows the design documents and may still change; the C ABI and the JavaScript classes
-change additively. What changed is in the [changelog](CHANGELOG.md).
+Status: 0.x. The Rust API follows [ARCHITECTURE.md](ARCHITECTURE.md) and may still change; the C ABI and the
+JavaScript classes change additively. What changed is in the [changelog](CHANGELOG.md).
+
+## Built on FlyHigh
+
+Projects that run on the engine carry the GitHub topic
+[`flyhigh-engine`](https://github.com/topics/flyhigh-engine); add it to yours to be listed there.
+
+- **[Framegen](https://github.com/MONZikWasTaken/Framegen)**: a browser extension that generates frames for any
+  `<video>` on a page (Chrome, Firefox); the first host written on the engine's classes alone.
 
 ## Weights
 
@@ -217,6 +227,11 @@ The FlyHighFG models this engine runs were trained and evaluated on GPU time gen
 </div>
 
 Built on **[wgpu](https://wgpu.rs)** and **[wasm-bindgen](https://github.com/rustwasm/wasm-bindgen)**.
+
+## Support
+
+The engine is free; the models behind it are trained on rented GPUs. If it is useful to you:
+[ko-fi.com/monzikxd](https://ko-fi.com/monzikxd).
 
 ## License
 
