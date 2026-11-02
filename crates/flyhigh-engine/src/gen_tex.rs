@@ -465,18 +465,13 @@ impl GenTex {
                 anyhow::ensure!(self.slots.len() >= 3, "video mode: push three frames first");
                 let sc_ = self.order[1];
                 match (self.retime_for(t), &self.scratch) {
-                    (Some(r), Some(_)) if r.full => {
-                        let s = &self.sess[r.sess];
-                        s.set_t(gpu, r.te);
-                        Ok((true, run(gpu, &s.mid_steps(gpu, out, view), timed)))
-                    }
                     (Some(r), Some(scr)) => {
                         gmhs::composite_frame(
                             gpu,
                             scr,
                             (&self.sess[sc_], t),
                             (&self.sess[r.sess], r.te),
-                            &self.sess[r.sess],
+                            (&self.sess[r.sess], r.full),
                             out,
                             view,
                         )?;

@@ -386,7 +386,11 @@ contexts (previous, current, next) and per-pair statistics from the repair maps:
 the global motion (an element jump), how much changed at all, and whether the pair is a scene cut. From the recent
 hold lengths it places each drawing on a uniform path and renders the element from the pair that contains its
 transition, at a re-timed phase, composited over the background by a mask (or the whole frame on a still shot). The
-real slot of an interval may then be re-synthesised too.
+real slot of an interval may then be re-synthesised too. Where the transition pair's model could not match the frames
+(a disocclusion: an arm appearing from behind the body) its render is a guess, so those cells, dilated and softened,
+keep the plain interpolation of the current interval, which shows the real drawing (`gm_trust.wgsl`). The price that
+remains: elsewhere every presented frame is a generated in-between, so big drawing steps show the generator's softness
+more often than plain interpolation does. Hosts offer it as a choice.
 
 ## Browser specifics
 

@@ -97,6 +97,14 @@ pub struct MaskP {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+pub struct TrustP {
+    pub n: u32,
+    pub full: u32,
+    pub _a: u32,
+    pub _b: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 pub struct CompP {
     pub hp: u32,
     pub wp: u32,
@@ -115,7 +123,7 @@ pub const DS: u32 = 2;
 // 2 = aggressive (no jump gate: ties on repeating texture go to the global motion; +0.4 dB more on the anime clip, but
 // natural video loses ~0.8 dB, so drawn content only).
 
-pub const PIPES: [(&str, &str, &str); 9] = [
+pub const PIPES: [(&str, &str, &str); 10] = [
     ("gm_fit_reduce", include_str!("../../../shaders/gm_fit_reduce.wgsl"), "main"),
     ("gm_fit_solve", include_str!("../../../shaders/gm_fit_solve.wgsl"), "main"),
     ("gm_cost", include_str!("../../../shaders/gm_cost.wgsl"), "main"),
@@ -125,6 +133,7 @@ pub const PIPES: [(&str, &str, &str); 9] = [
     ("gm_stats", include_str!("../../../shaders/gm_stats.wgsl"), "main"),
     ("gm_mask", include_str!("../../../shaders/gm_mask.wgsl"), "main"),
     ("gm_composite", include_str!("../../../shaders/gm_composite.wgsl"), "main"),
+    ("gm_trust", include_str!("../../../shaders/gm_trust.wgsl"), "main"),
 ];
 
 /// The cost maps kept for cadence smoothing: 5 x hc x wc f32 (`[0]` model cost, `[1]` affine cost, `[2]` displacement
@@ -234,6 +243,8 @@ pub struct CadenceScratch {
     pub bg_copy: Rc<wgpu::Buffer>,
     pub mask_a: Rc<wgpu::Buffer>,
     pub mask_b: Rc<wgpu::Buffer>,
+    pub trust_a: Rc<wgpu::Buffer>,
+    pub trust_b: Rc<wgpu::Buffer>,
     pub out: Tensor,
     pub part: Rc<wgpu::Buffer>,
     steps: RefCell<HashMap<(u8, usize, usize), Vec<Step>>>,
@@ -243,6 +254,11 @@ const K_STATS: u8 = 0;
 const K_MASK: u8 = 1;
 const K_COMP: u8 = 2;
 const K_OUT: u8 = 3;
+const K_TRUST: u8 = 4;
+/// Model cost (box-filtered luma mismatch, 0..1) above which the transition pair's render is a guess. Measured on the
+/// tunnel clip (a disoccluded arm), walk and fence: 0.03 keeps the real drawing there with 2 to 4 % stopped steps,
+/// against 2 % with no exclusion and 26 to 41 % for plain interpolation; 0.05 and up miss the disocclusions.
+const TRUST_COST: f32 = 0.03;
 fn sid(s: &SessionExt) -> usize {
     s as *const SessionExt as usize
 } // sessions live in GenTex::sess and never move
@@ -256,6 +272,8 @@ impl CadenceScratch {
             bg_copy: gpu.alloc(n),
             mask_a: gpu.alloc_f32((m.h * m.w) as usize),
             mask_b: gpu.alloc_f32((m.h * m.w) as usize),
+            trust_a: gpu.alloc_f32((m.h * m.w) as usize),
+            trust_b: gpu.alloc_f32((m.h * m.w) as usize),
             out,
             part: gpu.alloc_f32((STAT_WG * 4) as usize),
             steps: RefCell::new(HashMap::new()),
@@ -332,18 +350,20 @@ pub fn pair_stats(gpu: &Gpu, sess: &SessionExt, sc: &CadenceScratch) -> anyhow::
 }
 
 /// One re-timed output frame: background = the `bg` session's mid at its phase, element = the `elem` session's mid at
-/// its phase (each given as (session, phase)), composited with the element mask of `mask_from` (dilated jump region),
+/// its phase (each given as (session, phase)), composited with the element mask of the `mask` session (dilated jump
+/// region; the whole frame when its flag is set, a still shot) minus the cells where that session's model could not
+/// match the frames,
 /// written to output slot `slot` (view `out_view`, rgba8unorm storage).
 pub fn composite_frame(
     gpu: &Gpu,
     sc: &CadenceScratch,
     bg: (&SessionExt, f32),
     elem: (&SessionExt, f32),
-    mask_from: &SessionExt,
+    mask: (&SessionExt, bool),
     slot: usize,
     out_view: &wgpu::TextureView,
 ) -> anyhow::Result<()> {
-    let ((bg, t), (elem, te)) = (bg, elem);
+    let ((bg, t), (elem, te), (mask_from, full)) = (bg, elem, mask);
     let (m, ih, iw) = maps_of(mask_from).ok_or_else(|| anyhow::anyhow!("gmhs: session has no kept maps"))?;
     let s = m.scale;
     let n = m.h * m.w;
@@ -356,42 +376,68 @@ pub fn composite_frame(
     elem.set_t(gpu, te);
     let mut st: Vec<Step> = elem.plan_mid.iter().map(clone_step).collect();
     // element mask: threshold the displacement difference (6 full px), dilate (box 15 full px, > 0.3), soften (box 30 full px)
-    st.extend(sc.cached((K_MASK, sid(mask_from), 0), || {
-        let spx = s / 2.0 / DS as f32; // cost cells per full-frame px
-        let (r1, r2) = (((15.0 * spx).round() as u32).max(1), ((30.0 * spx).round() as u32).max(1));
-        let mp = |mode: u32, thr: f32| MaskP { n, ch: 2, mode, _a: 0, thr, _b: 0, _c: 0, _d: 0 };
+    if !full {
+        st.extend(sc.cached((K_MASK, sid(mask_from), 0), || {
+            let spx = s / 2.0 / DS as f32; // cost cells per full-frame px
+            let (r1, r2) = (((15.0 * spx).round() as u32).max(1), ((30.0 * spx).round() as u32).max(1));
+            let mp = |mode: u32, thr: f32| MaskP { n, ch: 2, mode, _a: 0, thr, _b: 0, _c: 0, _d: 0 };
+            let bp = |r: u32| BoxP { c: 1, h: m.h, w: m.w, r };
+            let g1 = (n.div_ceil(256), 1, 1);
+            vec![
+                gpu.compute_step("gm_mask", &[&m.buf], bytemuck::bytes_of(&mp(0, 3.0 * s)), &sc.mask_a, g1),
+                gpu.compute_step(
+                    "gm_box_h",
+                    &[&sc.mask_a],
+                    bytemuck::bytes_of(&bp(r1)),
+                    &sc.mask_b,
+                    workgroups_2d(m.w, m.h, 1),
+                ),
+                gpu.compute_step(
+                    "gm_box_v",
+                    &[&sc.mask_b],
+                    bytemuck::bytes_of(&bp(r1)),
+                    &sc.mask_a,
+                    workgroups_2d(m.w, m.h, 1),
+                ),
+                gpu.compute_step("gm_mask", &[&sc.mask_a], bytemuck::bytes_of(&mp(1, 0.3)), &sc.mask_b, g1),
+                gpu.compute_step(
+                    "gm_box_h",
+                    &[&sc.mask_b],
+                    bytemuck::bytes_of(&bp(r2)),
+                    &sc.mask_a,
+                    workgroups_2d(m.w, m.h, 1),
+                ),
+                gpu.compute_step(
+                    "gm_box_v",
+                    &[&sc.mask_a],
+                    bytemuck::bytes_of(&bp(r2)),
+                    &sc.mask_b,
+                    workgroups_2d(m.w, m.h, 1),
+                ),
+            ]
+        }));
+    }
+    // trust: cells where the transition pair's model cost is high, dilated and softened, are left to the plain
+    // interpolation (`gm_trust.wgsl`)
+    st.extend(sc.cached((K_TRUST, sid(mask_from), full as usize), || {
+        let spx = s / 2.0 / DS as f32;
+        let (r1, r2) = (((12.0 * spx).round() as u32).max(1), ((10.0 * spx).round() as u32).max(1));
+        let mp = |mode: u32, ch: u32, thr: f32| MaskP { n, ch, mode, _a: 0, thr, _b: 0, _c: 0, _d: 0 };
         let bp = |r: u32| BoxP { c: 1, h: m.h, w: m.w, r };
-        let g1 = (n.div_ceil(256), 1, 1);
+        let (g1, g2) = ((n.div_ceil(256), 1, 1), workgroups_2d(m.w, m.h, 1));
         vec![
-            gpu.compute_step("gm_mask", &[&m.buf], bytemuck::bytes_of(&mp(0, 3.0 * s)), &sc.mask_a, g1),
+            gpu.compute_step("gm_mask", &[&m.buf], bytemuck::bytes_of(&mp(0, 0, TRUST_COST)), &sc.trust_a, g1),
+            gpu.compute_step("gm_box_h", &[&sc.trust_a], bytemuck::bytes_of(&bp(r1)), &sc.trust_b, g2),
+            gpu.compute_step("gm_box_v", &[&sc.trust_b], bytemuck::bytes_of(&bp(r1)), &sc.trust_a, g2),
+            gpu.compute_step("gm_mask", &[&sc.trust_a], bytemuck::bytes_of(&mp(1, 0, 0.02)), &sc.trust_b, g1),
+            gpu.compute_step("gm_box_h", &[&sc.trust_b], bytemuck::bytes_of(&bp(r2)), &sc.trust_a, g2),
+            gpu.compute_step("gm_box_v", &[&sc.trust_a], bytemuck::bytes_of(&bp(r2)), &sc.trust_b, g2),
             gpu.compute_step(
-                "gm_box_h",
-                &[&sc.mask_a],
-                bytemuck::bytes_of(&bp(r1)),
-                &sc.mask_b,
-                workgroups_2d(m.w, m.h, 1),
-            ),
-            gpu.compute_step(
-                "gm_box_v",
-                &[&sc.mask_b],
-                bytemuck::bytes_of(&bp(r1)),
+                "gm_trust",
+                &[&sc.mask_b, &sc.trust_b],
+                bytemuck::bytes_of(&TrustP { n, full: full as u32, _a: 0, _b: 0 }),
                 &sc.mask_a,
-                workgroups_2d(m.w, m.h, 1),
-            ),
-            gpu.compute_step("gm_mask", &[&sc.mask_a], bytemuck::bytes_of(&mp(1, 0.3)), &sc.mask_b, g1),
-            gpu.compute_step(
-                "gm_box_h",
-                &[&sc.mask_b],
-                bytemuck::bytes_of(&bp(r2)),
-                &sc.mask_a,
-                workgroups_2d(m.w, m.h, 1),
-            ),
-            gpu.compute_step(
-                "gm_box_v",
-                &[&sc.mask_a],
-                bytemuck::bytes_of(&bp(r2)),
-                &sc.mask_b,
-                workgroups_2d(m.w, m.h, 1),
+                g1,
             ),
         ]
     }));
@@ -408,7 +454,7 @@ pub fn composite_frame(
         };
         vec![gpu.compute_step(
             "gm_composite",
-            &[&sc.bg_copy, &elem.render.buf, &sc.mask_b],
+            &[&sc.bg_copy, &elem.render.buf, &sc.mask_a],
             bytemuck::bytes_of(&cp),
             &sc.out.buf,
             workgroups_2d(bg.render.w, bg.render.h, 1),

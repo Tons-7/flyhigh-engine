@@ -78,8 +78,10 @@ pub struct StreamOptions {
     #[option(default = "realtime", values = "realtime, video", c = "mode (0, 1)")]
     pub mode: Mode,
     /// Video mode only. Anime is often drawn on twos (each drawing held for two frames) over a camera pan on every
-    /// frame; with cadence on, held elements are re-timed onto a smooth path. Turn it on for anime; it needs repair at
-    /// least 1 (0 is raised to 1).
+    /// frame; with cadence on, held elements are re-timed onto a smooth path. Presented frames are then generated
+    /// in-betweens, the real drawings included, except where the model could not match the frames (there the real
+    /// drawing stays): big drawing steps show the generator's softness more often. A choice for the viewer, not a
+    /// default. Needs repair at least 1 (0 is raised to 1).
     #[option(values = "on, off", c = "cadence (0, 1)")]
     pub cadence: bool,
     /// A pair whose mean per-channel difference (0 to 1, measured on a 48 x 27 grid) is above the threshold is a scene

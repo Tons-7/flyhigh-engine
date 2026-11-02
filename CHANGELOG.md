@@ -5,6 +5,18 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-02
+
+### Changed
+
+- Cadence re-timing keeps the real drawing where the transition pair's model could not match the frames (an arm
+  appearing from behind the body): the re-timed render there was a guess and showed as a translucent or doubled limb.
+  Still shots go through the same mask. On a clip with such a disocclusion the re-timed real slots are about half as far
+  from the source frames, with the same 2 % of stopped steps; ripples and ghost limbs on crowd and walk shots are gone.
+  No measurable cost: the same frame times natively, and in Chrome the same presents, delay and zero drops.
+- The cadence option describes its price: presented frames are generated in-betweens, so big drawing steps show the
+  generator's softness more often than plain interpolation does. A choice for the viewer, not a default.
+
 ## [0.1.1] - 2026-11-02
 
 ### Fixed
