@@ -68,6 +68,13 @@ fn push_to_js(p: &Push) -> Result<JsValue, JsValue> {
     js_sys::JSON::parse(&text)
 }
 
+/// An option value that must be an unsigned 32-bit integer; anything else is an error, never a nearby number.
+fn u32_value(v: &serde_json::Value, what: &str) -> Result<u32, JsValue> {
+    v.as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| JsValue::from_str(&format!("{what} must be an unsigned 32-bit integer, got {v}")))
+}
+
 fn timed_promise(run: Option<TimedRun>) -> js_sys::Promise {
     match run {
         Some(r) => future_to_promise(async move { Ok(JsValue::from_f64(r.finish().await)) }),
@@ -139,7 +146,7 @@ impl SessionOptionsJs {
             Some(serde_json::Value::String(s)) if s == "auto" => Internal::Auto,
             Some(serde_json::Value::String(s)) if s == "frame" => Internal::Frame,
             Some(serde_json::Value::Array(a)) if a.len() == 2 => {
-                Internal::Size(a[0].as_u64().unwrap_or(0) as u32, a[1].as_u64().unwrap_or(0) as u32)
+                Internal::Size(u32_value(&a[0], "internal")?, u32_value(&a[1], "internal")?)
             }
             Some(v) => return Err(JsValue::from_str(&format!("internal must be 'auto', 'frame' or [w, h], got {v}"))),
         };
@@ -161,8 +168,10 @@ impl SessionOptionsJs {
             Some(serde_json::Value::Object(m)) => {
                 let d = StaticProtection::default();
                 Some(StaticProtection {
-                    frames: m.get("frames").and_then(|v| v.as_u64()).map_or(d.frames, |v| v as u32),
-                    tolerance: m.get("tolerance").and_then(|v| v.as_u64()).map_or(d.tolerance, |v| v as u32),
+                    frames: m.get("frames").map_or(Ok(d.frames), |v| u32_value(v, "staticProtection.frames"))?,
+                    tolerance: m
+                        .get("tolerance")
+                        .map_or(Ok(d.tolerance), |v| u32_value(v, "staticProtection.tolerance"))?,
                 })
             }
             Some(v) => {

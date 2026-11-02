@@ -83,3 +83,12 @@ branches; the runtime always runs them (both are on in the shipped model).
    (expect render PSNR >= 50 dB against PyTorch, about 73 dB in practice).
 4. A different architecture works as long as it is expressed with the ops above and keeps the conventions of
    "What the runtime relies on".
+
+## What the loader checks
+
+A model is checked completely when it loads, so a directory handed to the engine from anywhere either loads or fails
+with the tensor's name: every `shape` entry is an unsigned integer of at least 1 (a scalar has an empty shape), the
+offset and the size are computed without overflow and the whole tensor lies inside `flyhighfg.bin`; every op of
+`graph.json` has a name, its `in`, `out` and `w` lists hold strings, a `repeat` has a body, and every weight an op
+reads (the four FiLM weights for `film_mlp`) exists in the manifest. The engine's tests load such files with every
+one of these faults (`crates/flyhigh-engine/tests/models.rs`).

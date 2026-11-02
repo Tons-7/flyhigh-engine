@@ -24,12 +24,14 @@ impl Blob {
         let render_cubic = man["meta"]["render_sampling"].as_str() == Some("bicubic");
         Ok(Blob { bytes, man, render_cubic })
     }
+    // `shape` and `weight` take a tensor the loader checked (`Model::from_shared`: every dimension an integer of at
+    // least 1, the tensor inside the blob, every name the graph reads present), so they index without a second look.
     pub fn shape(&self, name: &str) -> Vec<usize> {
         self.man["tensors"][name]["shape"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as usize).collect()
     }
     pub fn weight(&self, name: &str) -> Vec<f32> {
         let off = self.man["tensors"][name]["offset"].as_u64().unwrap() as usize;
-        let n = self.shape(name).iter().product::<usize>().max(1);
+        let n = self.shape(name).iter().product::<usize>();
         (0..n)
             .map(|i| {
                 let b = (off + i) * 2;

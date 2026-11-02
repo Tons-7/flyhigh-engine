@@ -1,7 +1,7 @@
 //! The Pacer over C: the scheduler of `flyhigh_engine::pacer` with options in a struct, a tick as an out-parameter
 //! and the requests of the last call copied into the caller's array. Times are the host's milliseconds. Single-threaded
 //! use per handle; a failed call returns -1 or null and `fh_last_error` has the message.
-use crate::set_err;
+use crate::{guard, set_err};
 use flyhigh_engine::pacer::{Frame, IntervalKind, Pacer, PacerOptions, RateMode, Request, SourceFrame, Stage};
 use std::ffi::c_char;
 
@@ -190,32 +190,36 @@ pub extern "C" fn fh_pacer_options_default() -> FhPacerOptions {
 /// `o` is null (the defaults) or points to a valid `FhPacerOptions`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_create(o: *const FhPacerOptions) -> *mut FhPacer {
-    let opts = if o.is_null() { Ok(PacerOptions::default()) } else { unsafe { &*o }.to_rust() };
-    let opts = match opts {
-        Ok(o) => o,
-        Err(e) => {
-            set_err(e);
-            return std::ptr::null_mut();
+    guard(std::ptr::null_mut(), || {
+        let opts = if o.is_null() { Ok(PacerOptions::default()) } else { unsafe { &*o }.to_rust() };
+        let opts = match opts {
+            Ok(o) => o,
+            Err(e) => {
+                set_err(e);
+                return std::ptr::null_mut();
+            }
+        };
+        match Pacer::new(&opts) {
+            Ok(pacer) => Box::into_raw(Box::new(FhPacer { pacer, last: Vec::new() })),
+            Err(e) => {
+                set_err(e);
+                std::ptr::null_mut()
+            }
         }
-    };
-    match Pacer::new(&opts) {
-        Ok(pacer) => Box::into_raw(Box::new(FhPacer { pacer, last: Vec::new() })),
-        Err(e) => {
-            set_err(e);
-            std::ptr::null_mut()
-        }
-    }
+    })
 }
 
 /// # Safety
 /// `p` is null or a handle from `fh_pacer_create` that is not used afterwards.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_destroy(p: *mut FhPacer) {
-    if !p.is_null() {
-        unsafe {
-            drop(Box::from_raw(p));
+    guard((), || {
+        if !p.is_null() {
+            unsafe {
+                drop(Box::from_raw(p));
+            }
         }
-    }
+    })
 }
 
 /// Changes options live (a new mode restarts the controller and the output grid).
@@ -223,18 +227,20 @@ pub unsafe extern "C" fn fh_pacer_destroy(p: *mut FhPacer) {
 /// `p` is a live handle; `o` points to a valid `FhPacerOptions`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_set_options(p: *mut FhPacer, now: f64, o: *const FhPacerOptions) -> i32 {
-    if p.is_null() || o.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let (p, o) = unsafe { (&mut *p, &*o) };
-    match o.to_rust().and_then(|o| p.pacer.set_options(now, &o).map_err(|e| e.to_string())) {
-        Ok(()) => 0,
-        Err(e) => {
-            set_err(e);
-            -1
+    guard(-1, || {
+        if p.is_null() || o.is_null() {
+            set_err("null argument");
+            return -1;
         }
-    }
+        let (p, o) = unsafe { (&mut *p, &*o) };
+        match o.to_rust().and_then(|o| p.pacer.set_options(now, &o).map_err(|e| e.to_string())) {
+            Ok(()) => 0,
+            Err(e) => {
+                set_err(e);
+                -1
+            }
+        }
+    })
 }
 
 /// The display tick: fills `out` with what to present and how many frames to generate (`fh_pacer_requests`).
@@ -242,34 +248,36 @@ pub unsafe extern "C" fn fh_pacer_set_options(p: *mut FhPacer, now: f64, o: *con
 /// `p` is a live handle; `out` points to a writable `FhTick`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_tick(p: *mut FhPacer, now: f64, out: *mut FhTick) -> i32 {
-    if p.is_null() || out.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let p = unsafe { &mut *p };
-    let tick = p.pacer.display_tick(now);
-    let (frame_kind, frame_id) = match tick.present.map(|pr| pr.frame) {
-        Some(Frame::Source(id)) => (0, id),
-        Some(Frame::Output(id)) => (1, id),
-        None => (0, 0),
-    };
-    let pr = tick.present;
-    p.last = tick.generate;
-    unsafe {
-        *out = FhTick {
-            has_present: pr.is_some() as u32,
-            frame_kind,
-            frame_id,
-            due_ms: pr.map_or(0.0, |x| x.due_ms),
-            late_ms: pr.map_or(0.0, |x| x.late_ms),
-            mid: pr.is_some_and(|x| x.mid) as u32,
-            fallback: pr.is_some_and(|x| x.fallback) as u32,
-            factor: tick.factor,
-            dropped: tick.dropped,
-            requests: p.last.len() as u32,
+    guard(-1, || {
+        if p.is_null() || out.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        let p = unsafe { &mut *p };
+        let tick = p.pacer.display_tick(now);
+        let (frame_kind, frame_id) = match tick.present.map(|pr| pr.frame) {
+            Some(Frame::Source(id)) => (0, id),
+            Some(Frame::Output(id)) => (1, id),
+            None => (0, 0),
         };
-    }
-    0
+        let pr = tick.present;
+        p.last = tick.generate;
+        unsafe {
+            *out = FhTick {
+                has_present: pr.is_some() as u32,
+                frame_kind,
+                frame_id,
+                due_ms: pr.map_or(0.0, |x| x.due_ms),
+                late_ms: pr.map_or(0.0, |x| x.late_ms),
+                mid: pr.is_some_and(|x| x.mid) as u32,
+                fallback: pr.is_some_and(|x| x.fallback) as u32,
+                factor: tick.factor,
+                dropped: tick.dropped,
+                requests: p.last.len() as u32,
+            };
+        }
+        0
+    })
 }
 
 /// A source frame arrived, its kind known. Returns how many requests must be generated before the pair changes
@@ -278,29 +286,31 @@ pub unsafe extern "C" fn fh_pacer_tick(p: *mut FhPacer, now: f64, out: *mut FhTi
 /// `p` is a live handle; `f` points to a valid `FhSourceFrame`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_source_frame(p: *mut FhPacer, now: f64, f: *const FhSourceFrame) -> i32 {
-    if p.is_null() || f.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let (p, f) = unsafe { (&mut *p, &*f) };
-    let kind = match f.kind {
-        0 => IntervalKind::Motion,
-        1 => IntervalKind::Cut,
-        2 => IntervalKind::Hold,
-        k => {
-            set_err(format!("unknown interval kind {k} (0 motion, 1 cut, 2 hold)"));
+    guard(-1, || {
+        if p.is_null() || f.is_null() {
+            set_err("null argument");
             return -1;
         }
-    };
-    let frame = SourceFrame {
-        id: f.id,
-        pts_ms: f.pts_ms,
-        kind,
-        motion: (f.has_motion != 0).then_some(f.motion),
-        skipped: f.skipped,
-    };
-    p.last = p.pacer.source_frame(now, frame);
-    p.last.len() as i32
+        let (p, f) = unsafe { (&mut *p, &*f) };
+        let kind = match f.kind {
+            0 => IntervalKind::Motion,
+            1 => IntervalKind::Cut,
+            2 => IntervalKind::Hold,
+            k => {
+                set_err(format!("unknown interval kind {k} (0 motion, 1 cut, 2 hold)"));
+                return -1;
+            }
+        };
+        let frame = SourceFrame {
+            id: f.id,
+            pts_ms: f.pts_ms,
+            kind,
+            motion: (f.has_motion != 0).then_some(f.motion),
+            skipped: f.skipped,
+        };
+        p.last = p.pacer.source_frame(now, frame);
+        p.last.len() as i32
+    })
 }
 
 /// Copies the requests of the last `fh_pacer_tick` / `fh_pacer_source_frame` into `buf` (at most `cap`); returns
@@ -309,17 +319,19 @@ pub unsafe extern "C" fn fh_pacer_source_frame(p: *mut FhPacer, now: f64, f: *co
 /// `p` is a live handle; `buf` points to `cap` writable `FhRequest`s (may be null when `cap` is 0).
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_requests(p: *const FhPacer, buf: *mut FhRequest, cap: usize) -> i32 {
-    if p.is_null() || (buf.is_null() && cap > 0) {
-        set_err("null argument");
-        return -1;
-    }
-    let p = unsafe { &*p };
-    for (i, r) in p.last.iter().take(cap).enumerate() {
-        unsafe {
-            *buf.add(i) = req(r);
+    guard(-1, || {
+        if p.is_null() || (buf.is_null() && cap > 0) {
+            set_err("null argument");
+            return -1;
         }
-    }
-    p.last.len() as i32
+        let p = unsafe { &*p };
+        for (i, r) in p.last.iter().take(cap).enumerate() {
+            unsafe {
+                *buf.add(i) = req(r);
+            }
+        }
+        p.last.len() as i32
+    })
 }
 
 /// The host generated (submitted) the frame of a request into output slot `output`.
@@ -327,12 +339,14 @@ pub unsafe extern "C" fn fh_pacer_requests(p: *const FhPacer, buf: *mut FhReques
 /// `p` is a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_generated(p: *mut FhPacer, now: f64, request: u64, output: u32) -> i32 {
-    if p.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    unsafe { &mut *p }.pacer.generated(now, request, Frame::Output(output));
-    0
+    guard(-1, || {
+        if p.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        unsafe { &mut *p }.pacer.generated(now, request, Frame::Output(output));
+        0
+    })
 }
 
 /// The Stream answered that the source frame is enough for a request.
@@ -340,12 +354,14 @@ pub unsafe extern "C" fn fh_pacer_generated(p: *mut FhPacer, now: f64, request: 
 /// `p` is a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_skipped(p: *mut FhPacer, request: u64) -> i32 {
-    if p.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    unsafe { &mut *p }.pacer.skipped(request);
-    0
+    guard(-1, || {
+        if p.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        unsafe { &mut *p }.pacer.skipped(request);
+        0
+    })
 }
 
 /// A measured GPU cost: `stage` 0 pair, 1 mid, 2 present. Returns 1 when taken, 0 when ignored (inside the settle
@@ -354,56 +370,64 @@ pub unsafe extern "C" fn fh_pacer_skipped(p: *mut FhPacer, request: u64) -> i32 
 /// `p` is a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_cost_sample(p: *mut FhPacer, now: f64, stage: u32, ms: f64) -> i32 {
-    if p.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let stage = match stage {
-        0 => Stage::Pair,
-        1 => Stage::Mid,
-        2 => Stage::Present,
-        s => {
-            set_err(format!("unknown stage {s} (0 pair, 1 mid, 2 present)"));
+    guard(-1, || {
+        if p.is_null() {
+            set_err("null argument");
             return -1;
         }
-    };
-    unsafe { &mut *p }.pacer.cost_sample(now, stage, ms) as i32
+        let stage = match stage {
+            0 => Stage::Pair,
+            1 => Stage::Mid,
+            2 => Stage::Present,
+            s => {
+                set_err(format!("unknown stage {s} (0 pair, 1 mid, 2 present)"));
+                return -1;
+            }
+        };
+        unsafe { &mut *p }.pacer.cost_sample(now, stage, ms) as i32
+    })
 }
 
 /// # Safety
 /// `p` is a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_host_stall(p: *mut FhPacer, now: f64, ms: f64) -> i32 {
-    if p.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    unsafe { &mut *p }.pacer.host_stall(now, ms);
-    0
+    guard(-1, || {
+        if p.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        unsafe { &mut *p }.pacer.host_stall(now, ms);
+        0
+    })
 }
 
 /// # Safety
 /// `p` is a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_mode_change(p: *mut FhPacer, now: f64) -> i32 {
-    if p.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    unsafe { &mut *p }.pacer.mode_change(now);
-    0
+    guard(-1, || {
+        if p.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        unsafe { &mut *p }.pacer.mode_change(now);
+        0
+    })
 }
 
 /// # Safety
 /// `p` is a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_reset(p: *mut FhPacer, now: f64) -> i32 {
-    if p.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    unsafe { &mut *p }.pacer.reset(now);
-    0
+    guard(-1, || {
+        if p.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        unsafe { &mut *p }.pacer.reset(now);
+        0
+    })
 }
 
 /// Records every call from now on into a `trace v1` named after `host` (NULL = unnamed); `fh_pacer_trace_json` reads it.
@@ -411,17 +435,19 @@ pub unsafe extern "C" fn fh_pacer_reset(p: *mut FhPacer, now: f64) -> i32 {
 /// `p` is a live handle; `host` is null or a NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_record(p: *mut FhPacer, host: *const c_char) -> i32 {
-    if p.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let host = if host.is_null() {
-        String::new()
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(host) }.to_string_lossy().to_string()
-    };
-    unsafe { &mut *p }.pacer.record(&host);
-    0
+    guard(-1, || {
+        if p.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        let host = if host.is_null() {
+            String::new()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(host) }.to_string_lossy().to_string()
+        };
+        unsafe { &mut *p }.pacer.record(&host);
+        0
+    })
 }
 
 /// The recording so far as JSON (`trace v1`); bytes written, or -1 when not recording or the buffer is too small.
@@ -429,25 +455,27 @@ pub unsafe extern "C" fn fh_pacer_record(p: *mut FhPacer, host: *const c_char) -
 /// `p` is a live handle; `buf` points to `cap` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_trace_json(p: *const FhPacer, buf: *mut c_char, cap: usize) -> i32 {
-    if p.is_null() || buf.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let Some(t) = unsafe { &*p }.pacer.trace() else {
-        set_err("not recording (fh_pacer_record first)");
-        return -1;
-    };
-    let s = t.to_json();
-    let b = s.as_bytes();
-    if b.len() + 1 > cap {
-        set_err(format!("buffer too small ({} needed)", b.len() + 1));
-        return -1;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(b.as_ptr(), buf as *mut u8, b.len());
-        *buf.add(b.len()) = 0;
-    }
-    b.len() as i32
+    guard(-1, || {
+        if p.is_null() || buf.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        let Some(t) = unsafe { &*p }.pacer.trace() else {
+            set_err("not recording (fh_pacer_record first)");
+            return -1;
+        };
+        let s = t.to_json();
+        let b = s.as_bytes();
+        if b.len() + 1 > cap {
+            set_err(format!("buffer too small ({} needed)", b.len() + 1));
+            return -1;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(b.as_ptr(), buf as *mut u8, b.len());
+            *buf.add(b.len()) = 0;
+        }
+        b.len() as i32
+    })
 }
 
 /// The report as JSON (`PacerReport`); bytes written or -1 (`fh_last_error` names the size needed).
@@ -455,19 +483,21 @@ pub unsafe extern "C" fn fh_pacer_trace_json(p: *const FhPacer, buf: *mut c_char
 /// `p` is a live handle; `buf` points to `cap` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn fh_pacer_report_json(p: *const FhPacer, buf: *mut c_char, cap: usize) -> i32 {
-    if p.is_null() || buf.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let s = unsafe { &*p }.pacer.report().to_json();
-    let b = s.as_bytes();
-    if b.len() + 1 > cap {
-        set_err(format!("buffer too small ({} needed)", b.len() + 1));
-        return -1;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(b.as_ptr(), buf as *mut u8, b.len());
-        *buf.add(b.len()) = 0;
-    }
-    b.len() as i32
+    guard(-1, || {
+        if p.is_null() || buf.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        let s = unsafe { &*p }.pacer.report().to_json();
+        let b = s.as_bytes();
+        if b.len() + 1 > cap {
+            set_err(format!("buffer too small ({} needed)", b.len() + 1));
+            return -1;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(b.as_ptr(), buf as *mut u8, b.len());
+            *buf.add(b.len()) = 0;
+        }
+        b.len() as i32
+    })
 }

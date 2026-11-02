@@ -1,7 +1,7 @@
 //! The Stream over C: frames with timestamps in, intervals out (CPU RGBA8 frames until the texture interop of phase
 //! 4). Single-threaded use per handle; a failed call returns -1 or null and `fh_last_error` has the message.
 use crate::core::FhSessionOptions;
-use crate::{set_err, write_json};
+use crate::{guard, set_err, write_json};
 use flyhigh_engine::stream::{Generated, HeldFrames, IntervalKind, Mode, SceneCut, Stream, StreamOptions};
 use flyhigh_engine::{Engine, Model};
 use std::ffi::c_char;
@@ -108,54 +108,62 @@ pub unsafe extern "C" fn fh_stream_create(
     so: *const FhSessionOptions,
     o: *const FhStreamOptions,
 ) -> *mut Stream {
-    if e.is_null() || m.is_null() || so.is_null() || o.is_null() {
-        set_err("null argument");
-        return std::ptr::null_mut();
-    }
-    let opts = unsafe { (*so).to_rust() }.and_then(|s| unsafe { &*o }.to_rust().map(|st| (s, st)));
-    let (session, stream) = match opts {
-        Ok(v) => v,
-        Err(err) => {
-            set_err(err);
+    guard(std::ptr::null_mut(), || {
+        if e.is_null() || m.is_null() || so.is_null() || o.is_null() {
+            set_err("null argument");
             return std::ptr::null_mut();
         }
-    };
-    match Stream::open(unsafe { &*e }, unsafe { &*m }, &session, &stream) {
-        Ok(s) => Box::into_raw(Box::new(s)),
-        Err(err) => {
-            set_err(err);
-            std::ptr::null_mut()
+        let opts = unsafe { (*so).to_rust() }.and_then(|s| unsafe { &*o }.to_rust().map(|st| (s, st)));
+        let (session, stream) = match opts {
+            Ok(v) => v,
+            Err(err) => {
+                set_err(err);
+                return std::ptr::null_mut();
+            }
+        };
+        match Stream::open(unsafe { &*e }, unsafe { &*m }, &session, &stream) {
+            Ok(s) => Box::into_raw(Box::new(s)),
+            Err(err) => {
+                set_err(err);
+                std::ptr::null_mut()
+            }
         }
-    }
+    })
 }
 
 /// # Safety
 /// `s` is null or a handle from `fh_stream_create` that is not used afterwards.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_destroy(s: *mut Stream) {
-    if !s.is_null() {
-        unsafe {
-            drop(Box::from_raw(s));
+    guard((), || {
+        if !s.is_null() {
+            unsafe {
+                drop(Box::from_raw(s));
+            }
         }
-    }
+    })
 }
 
 /// # Safety
 /// `s` is a live handle created on `e`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_add_input(s: *mut Stream, e: *const Engine) -> i32 {
-    live!(s);
-    live!(e);
-    unsafe { &mut *s }.add_input(unsafe { &*e }.gpu()) as i32
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        unsafe { &mut *s }.add_input(unsafe { &*e }.gpu()) as i32
+    })
 }
 
 /// # Safety
 /// `s` is a live handle created on `e`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_add_output(s: *mut Stream, e: *const Engine) -> i32 {
-    live!(s);
-    live!(e);
-    unsafe { &mut *s }.add_output(unsafe { &*e }.gpu()) as i32
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        unsafe { &mut *s }.add_output(unsafe { &*e }.gpu()) as i32
+    })
 }
 
 /// The slot to write the next source frame into: never one the stream still reads nor one of the `n` slots in
@@ -164,9 +172,12 @@ pub unsafe extern "C" fn fh_stream_add_output(s: *mut Stream, e: *const Engine) 
 /// `s` is a live handle; `in_use` points to `n` readable slot numbers (may be null when `n` is 0).
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_next_input(s: *mut Stream, in_use: *const u32, n: usize) -> i32 {
-    live!(s);
-    let used: &[u32] = if in_use.is_null() || n == 0 { &[] } else { unsafe { std::slice::from_raw_parts(in_use, n) } };
-    unsafe { &mut *s }.next_input(|slot| used.contains(&(slot as u32))).map_or(-1, |slot| slot as i32)
+    guard(-1, || {
+        live!(s);
+        let used: &[u32] =
+            if in_use.is_null() || n == 0 { &[] } else { unsafe { std::slice::from_raw_parts(in_use, n) } };
+        unsafe { &mut *s }.next_input(|slot| used.contains(&(slot as u32))).map_or(-1, |slot| slot as i32)
+    })
 }
 
 /// A frame (RGBA8, width * height * 4 bytes) into an input slot; 0 or -1.
@@ -180,34 +191,36 @@ pub unsafe extern "C" fn fh_stream_write_rgba(
     rgba: *const u8,
     len: usize,
 ) -> i32 {
-    live!(s);
-    live!(e);
-    if rgba.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let (s, gpu) = (unsafe { &*s }, unsafe { &*e }.gpu());
-    if slot as usize >= s.inputs() {
-        set_err(format!("bad input slot {slot} (the stream has {})", s.inputs()));
-        return -1;
-    }
-    let (w, h) = (s.tex_options().w, s.tex_options().h);
-    if len != (w * h * 4) as usize {
-        set_err(format!("frame is {len} bytes, {w}x{h}x4 = {} expected", w * h * 4));
-        return -1;
-    }
-    gpu.queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: s.input_texture(slot as usize),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        unsafe { std::slice::from_raw_parts(rgba, len) },
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
-    0
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        if rgba.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        let (s, gpu) = (unsafe { &*s }, unsafe { &*e }.gpu());
+        if slot as usize >= s.inputs() {
+            set_err(format!("bad input slot {slot} (the stream has {})", s.inputs()));
+            return -1;
+        }
+        let (w, h) = (s.tex_options().w, s.tex_options().h);
+        if len != (w * h * 4) as usize {
+            set_err(format!("frame is {len} bytes, {w}x{h}x4 = {} expected", w * h * 4));
+            return -1;
+        }
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: s.input_texture(slot as usize),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            unsafe { std::slice::from_raw_parts(rgba, len) },
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        0
+    })
 }
 
 /// The protection mask (`protection_mask` of the session options): width * height bytes, 0 interpolates, anything
@@ -216,20 +229,22 @@ pub unsafe extern "C" fn fh_stream_write_rgba(
 /// `s` is a live handle created on `e`; `mask` points to `len` readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_write_mask(s: *const Stream, e: *const Engine, mask: *const u8, len: usize) -> i32 {
-    live!(s);
-    live!(e);
-    if mask.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(mask, len) };
-    match unsafe { &*s }.write_mask(unsafe { &*e }.gpu(), bytes) {
-        Ok(()) => 0,
-        Err(e) => {
-            set_err(e);
-            -1
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        if mask.is_null() {
+            set_err("null argument");
+            return -1;
         }
-    }
+        let bytes = unsafe { std::slice::from_raw_parts(mask, len) };
+        match unsafe { &*s }.write_mask(unsafe { &*e }.gpu(), bytes) {
+            Ok(()) => 0,
+            Err(e) => {
+                set_err(e);
+                -1
+            }
+        }
+    })
 }
 
 /// Classifies the pair (`previous`, `slot`) before pushing it, waiting for the GPU: 1 and `out` filled, 0 when the
@@ -244,40 +259,42 @@ pub unsafe extern "C" fn fh_stream_classify(
     slot: u32,
     out: *mut FhClassification,
 ) -> i32 {
-    live!(s);
-    live!(e);
-    if out.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let (s, gpu) = (unsafe { &mut *s }, unsafe { &*e }.gpu());
-    if previous as usize >= s.inputs() || slot as usize >= s.inputs() {
-        set_err("bad input slot");
-        return -1;
-    }
-    let Some(rb) = s.classify(gpu, previous as usize, slot as usize) else { return 0 };
-    match rb.block(gpu) {
-        Ok(c) => {
-            unsafe {
-                *out = FhClassification {
-                    kind: match c.kind {
-                        IntervalKind::Motion => 0,
-                        IntervalKind::Cut => 1,
-                        IntervalKind::Hold => 2,
-                    },
-                    mean: c.mean,
-                    max: c.max,
-                    black: c.black as u32,
-                    motion: c.motion,
-                };
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        if out.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        let (s, gpu) = (unsafe { &mut *s }, unsafe { &*e }.gpu());
+        if previous as usize >= s.inputs() || slot as usize >= s.inputs() {
+            set_err("bad input slot");
+            return -1;
+        }
+        let Some(rb) = s.classify(gpu, previous as usize, slot as usize) else { return 0 };
+        match rb.block(gpu) {
+            Ok(c) => {
+                unsafe {
+                    *out = FhClassification {
+                        kind: match c.kind {
+                            IntervalKind::Motion => 0,
+                            IntervalKind::Cut => 1,
+                            IntervalKind::Hold => 2,
+                        },
+                        mean: c.mean,
+                        max: c.max,
+                        black: c.black as u32,
+                        motion: c.motion,
+                    };
+                }
+                1
             }
-            1
+            Err(err) => {
+                set_err(err);
+                -1
+            }
         }
-        Err(err) => {
-            set_err(err);
-            -1
-        }
-    }
+    })
 }
 
 /// The newest source frame is in `slot` with timestamp `pts` (the host's units, usually media ms): runs its pair and
@@ -292,30 +309,32 @@ pub unsafe extern "C" fn fh_stream_push(
     pts: f64,
     out: *mut FhPush,
 ) -> i32 {
-    live!(s);
-    live!(e);
-    if out.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    match unsafe { &mut *s }.push(unsafe { &*e }.gpu(), slot as usize, pts) {
-        Ok(p) => {
-            unsafe {
-                *out = FhPush {
-                    ready: p.interval.is_some() as u32,
-                    base_slot: p.interval.map_or(-1, |i| i.base as i32),
-                    stats_pending: p.stats_pending as u32,
-                    start_pts: p.interval.map_or(0.0, |i| i.start_pts),
-                    end_pts: p.interval.map_or(0.0, |i| i.end_pts),
-                };
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        if out.is_null() {
+            set_err("null argument");
+            return -1;
+        }
+        match unsafe { &mut *s }.push(unsafe { &*e }.gpu(), slot as usize, pts) {
+            Ok(p) => {
+                unsafe {
+                    *out = FhPush {
+                        ready: p.interval.is_some() as u32,
+                        base_slot: p.interval.map_or(-1, |i| i.base as i32),
+                        stats_pending: p.stats_pending as u32,
+                        start_pts: p.interval.map_or(0.0, |i| i.start_pts),
+                        end_pts: p.interval.map_or(0.0, |i| i.end_pts),
+                    };
+                }
+                0
             }
-            0
+            Err(err) => {
+                set_err(err);
+                -1
+            }
         }
-        Err(err) => {
-            set_err(err);
-            -1
-        }
-    }
+    })
 }
 
 /// Video + cadence: waits for the pending pair statistics; 0 or -1.
@@ -323,15 +342,17 @@ pub unsafe extern "C" fn fh_stream_push(
 /// `s` is a live handle created on `e`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_resolve_stats(s: *mut Stream, e: *const Engine) -> i32 {
-    live!(s);
-    live!(e);
-    match unsafe { &mut *s }.resolve_stats(unsafe { &*e }.gpu()) {
-        Ok(()) => 0,
-        Err(err) => {
-            set_err(err);
-            -1
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        match unsafe { &mut *s }.resolve_stats(unsafe { &*e }.gpu()) {
+            Ok(()) => 0,
+            Err(err) => {
+                set_err(err);
+                -1
+            }
         }
-    }
+    })
 }
 
 /// Whether the current interval's real slot is re-timed (generate phase 0 instead of presenting the source).
@@ -339,8 +360,10 @@ pub unsafe extern "C" fn fh_stream_resolve_stats(s: *mut Stream, e: *const Engin
 /// `s` is a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_real_replaced(s: *const Stream) -> i32 {
-    live!(s);
-    unsafe { &*s }.real_replaced() as i32
+    guard(-1, || {
+        live!(s);
+        unsafe { &*s }.real_replaced() as i32
+    })
 }
 
 /// Phase `t` of the current interval into output slot `out`: 1 written, 0 the source frame is enough (t = 0 without
@@ -349,16 +372,18 @@ pub unsafe extern "C" fn fh_stream_real_replaced(s: *const Stream) -> i32 {
 /// `s` is a live handle created on `e`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_generate(s: *mut Stream, e: *const Engine, t: f32, out: u32) -> i32 {
-    live!(s);
-    live!(e);
-    match unsafe { &mut *s }.generate(unsafe { &*e }.gpu(), t, out as usize) {
-        Ok(Generated::Written) => 1,
-        Ok(Generated::SourceIsEnough) => 0,
-        Err(err) => {
-            set_err(err);
-            -1
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        match unsafe { &mut *s }.generate(unsafe { &*e }.gpu(), t, out as usize) {
+            Ok(Generated::Written) => 1,
+            Ok(Generated::SourceIsEnough) => 0,
+            Err(err) => {
+                set_err(err);
+                -1
+            }
         }
-    }
+    })
 }
 
 /// An output slot as RGBA8 bytes into `buf` (cap >= width * height * 4), waiting for the GPU; bytes written or -1.
@@ -372,68 +397,70 @@ pub unsafe extern "C" fn fh_stream_read_rgba(
     buf: *mut u8,
     cap: usize,
 ) -> i32 {
-    live!(s);
-    live!(e);
-    if buf.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let (s, gpu) = (unsafe { &*s }, unsafe { &*e }.gpu());
-    if out as usize >= s.outputs() {
-        set_err(format!("bad output slot {out} (the stream has {})", s.outputs()));
-        return -1;
-    }
-    let (w, h) = (s.tex_options().w, s.tex_options().h);
-    let bpr = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let stage = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("fh_stream_read"),
-        size: (bpr * h) as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    enc.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: s.output_texture(out as usize),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &stage,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) },
-        },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
-    gpu.queue.submit(Some(enc.finish()));
-    let rb = flyhigh_engine::gpu::readback::Readback::new(
-        stage,
-        Box::new(move |d: &[u8]| {
-            let row = (w * 4) as usize;
-            let mut v = Vec::with_capacity(row * h as usize);
-            for y in 0..h as usize {
-                let o = y * bpr as usize;
-                v.extend_from_slice(&d[o..o + row]);
-            }
-            v
-        }),
-        None,
-    );
-    let v = match rb.block(gpu) {
-        Ok(v) => v,
-        Err(err) => {
-            set_err(err);
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        if buf.is_null() {
+            set_err("null argument");
             return -1;
         }
-    };
-    if v.len() > cap {
-        set_err(format!("output buffer too small ({} needed)", v.len()));
-        return -1;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(v.as_ptr(), buf, v.len());
-    }
-    v.len() as i32
+        let (s, gpu) = (unsafe { &*s }, unsafe { &*e }.gpu());
+        if out as usize >= s.outputs() {
+            set_err(format!("bad output slot {out} (the stream has {})", s.outputs()));
+            return -1;
+        }
+        let (w, h) = (s.tex_options().w, s.tex_options().h);
+        let bpr = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let stage = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("fh_stream_read"),
+            size: (bpr * h) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: s.output_texture(out as usize),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &stage,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        gpu.queue.submit(Some(enc.finish()));
+        let rb = flyhigh_engine::gpu::readback::Readback::new(
+            stage,
+            Box::new(move |d: &[u8]| {
+                let row = (w * 4) as usize;
+                let mut v = Vec::with_capacity(row * h as usize);
+                for y in 0..h as usize {
+                    let o = y * bpr as usize;
+                    v.extend_from_slice(&d[o..o + row]);
+                }
+                v
+            }),
+            None,
+        );
+        let v = match rb.block(gpu) {
+            Ok(v) => v,
+            Err(err) => {
+                set_err(err);
+                return -1;
+            }
+        };
+        if v.len() > cap {
+            set_err(format!("output buffer too small ({} needed)", v.len()));
+            return -1;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(v.as_ptr(), buf, v.len());
+        }
+        v.len() as i32
+    })
 }
 
 /// Compiles every kernel the stream runs, before the first real frame; 0 or -1.
@@ -441,15 +468,17 @@ pub unsafe extern "C" fn fh_stream_read_rgba(
 /// `s` is a live handle created on `e`.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_warm_up(s: *mut Stream, e: *const Engine) -> i32 {
-    live!(s);
-    live!(e);
-    match unsafe { &mut *s }.warm_up(unsafe { &*e }.gpu()) {
-        Ok(()) => 0,
-        Err(err) => {
-            set_err(err);
-            -1
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        match unsafe { &mut *s }.warm_up(unsafe { &*e }.gpu()) {
+            Ok(()) => 0,
+            Err(err) => {
+                set_err(err);
+                -1
+            }
         }
-    }
+    })
 }
 
 /// A seek, a decoder gap, a new source: forget the frames, keep the plans.
@@ -457,9 +486,11 @@ pub unsafe extern "C" fn fh_stream_warm_up(s: *mut Stream, e: *const Engine) -> 
 /// `s` is a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_reset(s: *mut Stream) -> i32 {
-    live!(s);
-    unsafe { &mut *s }.reset();
-    0
+    guard(-1, || {
+        live!(s);
+        unsafe { &mut *s }.reset();
+        0
+    })
 }
 
 /// The stream's report as JSON (`StreamReport`); bytes written or -1.
@@ -467,18 +498,20 @@ pub unsafe extern "C" fn fh_stream_reset(s: *mut Stream) -> i32 {
 /// `s` is a live handle; `buf` points to `cap` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn fh_stream_report_json(s: *const Stream, buf: *mut c_char, cap: usize) -> i32 {
-    live!(s);
-    if buf.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    match serde_json::to_string(&unsafe { &*s }.report()) {
-        Ok(j) => unsafe { write_json(&j, buf, cap) },
-        Err(err) => {
-            set_err(err);
-            -1
+    guard(-1, || {
+        live!(s);
+        if buf.is_null() {
+            set_err("null argument");
+            return -1;
         }
-    }
+        match serde_json::to_string(&unsafe { &*s }.report()) {
+            Ok(j) => unsafe { write_json(&j, buf, cap) },
+            Err(err) => {
+                set_err(err);
+                -1
+            }
+        }
+    })
 }
 
 /// A D3D11 texture shared through an NT handle, imported into the engine's Vulkan device without a copy and added as
@@ -493,24 +526,26 @@ pub unsafe extern "C" fn fh_stream_import_d3d11(
     width: u32,
     height: u32,
 ) -> i32 {
-    live!(s);
-    live!(e);
-    #[cfg(windows)]
-    {
-        use flyhigh_engine::interop::{d3d11_shared_texture, SharedTexture};
-        let tex = d3d11_shared_texture(unsafe { &*e }, handle, &SharedTexture::rgba8(width, height));
-        match tex.and_then(|t| unsafe { &mut *s }.add_input_texture(t)) {
-            Ok(slot) => slot as i32,
-            Err(err) => {
-                set_err(err);
-                -1
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        #[cfg(windows)]
+        {
+            use flyhigh_engine::interop::{d3d11_shared_texture, SharedTexture};
+            let tex = d3d11_shared_texture(unsafe { &*e }, handle, &SharedTexture::rgba8(width, height));
+            match tex.and_then(|t| unsafe { &mut *s }.add_input_texture(t)) {
+                Ok(slot) => slot as i32,
+                Err(err) => {
+                    set_err(err);
+                    -1
+                }
             }
         }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (handle, width, height);
-        set_err("D3D11 import is Windows only");
-        -1
-    }
+        #[cfg(not(windows))]
+        {
+            let _ = (handle, width, height);
+            set_err("D3D11 import is Windows only");
+            -1
+        }
+    })
 }

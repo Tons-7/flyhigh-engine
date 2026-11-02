@@ -1,12 +1,12 @@
 // The Core and the Stream over C: the option structs map both ways without loss (no GPU), and on a real GPU a C host
 // generates an in-between through fh_engine / fh_model / fh_session and through fh_stream (ignored by default).
 use flyhigh::{
-    fh_engine_create, fh_engine_destroy, fh_engine_info, fh_engine_options_default, fh_model_destroy, fh_model_info,
-    fh_model_load, fh_session_add_input, fh_session_add_output, fh_session_create, fh_session_destroy, fh_session_mid,
-    fh_session_options_default, fh_session_pair, fh_session_read_rgba, fh_session_report_json, fh_session_write_rgba,
-    fh_stream_classify, fh_stream_create, fh_stream_destroy, fh_stream_generate, fh_stream_next_input,
-    fh_stream_options_default, fh_stream_push, fh_stream_read_rgba, fh_stream_write_rgba, FhClassification, FhPush,
-    FhSessionOptions, FhStreamOptions,
+    fh_engine_create, fh_engine_destroy, fh_engine_info, fh_engine_options_default, fh_model_destroy,
+    fh_model_from_bytes, fh_model_info, fh_model_load, fh_session_add_input, fh_session_add_output, fh_session_create,
+    fh_session_destroy, fh_session_mid, fh_session_options_default, fh_session_pair, fh_session_read_rgba,
+    fh_session_report_json, fh_session_write_rgba, fh_stream_classify, fh_stream_create, fh_stream_destroy,
+    fh_stream_generate, fh_stream_next_input, fh_stream_options_default, fh_stream_push, fh_stream_read_rgba,
+    fh_stream_write_rgba, FhClassification, FhPush, FhSessionOptions, FhStreamOptions,
 };
 use flyhigh_engine::stream::{HeldFrames, Mode, SceneCut, StreamOptions};
 use flyhigh_engine::{Internal, RenderSampling, SessionOptions, StaticProtection};
@@ -159,4 +159,34 @@ fn a_c_host_generates_an_inbetween_through_the_core_and_the_stream() {
         fh_model_destroy(m);
         fh_engine_destroy(e);
     }
+}
+
+#[test]
+fn a_malformed_model_is_an_error_message_over_c() {
+    let graph = br#"{"ops": [{"op": "conv", "in": ["a"], "out": ["b"], "w": ["w0"]}]}"#;
+    let manifest = br#"{"tensors": {"w0": {"shape": [2, "3"], "offset": 0}}}"#;
+    let weights = [0u8; 64];
+    let m = unsafe {
+        fh_model_from_bytes(
+            graph.as_ptr(),
+            graph.len(),
+            manifest.as_ptr(),
+            manifest.len(),
+            weights.as_ptr(),
+            weights.len(),
+        )
+    };
+    assert!(m.is_null());
+    assert!(last_error().contains("tensor w0"), "{}", last_error());
+}
+
+#[test]
+fn a_panic_inside_a_call_becomes_an_error_not_an_abort() {
+    // a NUL in the path cannot become a CString: the one way to make fh_model_load panic from the outside
+    let bad = CString::new("x").unwrap();
+    let m = unsafe { fh_model_load(bad.as_ptr()) };
+    assert!(m.is_null());
+    let r = flyhigh::guard(-1, || -> i32 { panic!("boom") });
+    assert_eq!(r, -1);
+    assert!(last_error().contains("boom"), "{}", last_error());
 }

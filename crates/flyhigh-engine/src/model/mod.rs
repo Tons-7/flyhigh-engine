@@ -65,17 +65,11 @@ impl Model {
             FORMAT_VERSIONS.start(),
             FORMAT_VERSIONS.end()
         );
-        let n_bytes = blob.bytes.len();
-        for (name, t) in blob.man["tensors"].as_object().context("manifest has no tensors")? {
-            let off = t["offset"].as_u64().with_context(|| format!("tensor {name}: no offset"))? as usize;
-            let n: usize = t["shape"]
-                .as_array()
-                .with_context(|| format!("tensor {name}: no shape"))?
-                .iter()
-                .map(|v| v.as_u64().unwrap_or(0) as usize)
-                .product();
-            anyhow::ensure!((off + n) * 2 <= n_bytes, "tensor {name} runs past the end of the weight blob");
+        let tensors = blob.man["tensors"].as_object().context("manifest has no tensors")?;
+        for (name, t) in tensors {
+            check_tensor(name, t, blob.bytes.len())?;
         }
+        graph::validate(&ops, tensors)?;
         let info = ModelInfo {
             name: meta["model"].as_str().unwrap_or("?").to_string(),
             train_step: meta["train_step"].as_i64().unwrap_or(-1),
@@ -90,7 +84,29 @@ impl Model {
     pub fn info(&self) -> &ModelInfo {
         &self.info
     }
+}
 
+/// A tensor entry of the manifest: an unsigned offset, integer dimensions of at least 1 (a scalar has none), and the
+/// whole tensor inside the f16 blob. Every arithmetic step is checked: the manifest is a file a host may have been
+/// handed, and the blob accessors index the bytes without a second look.
+fn check_tensor(name: &str, t: &Value, n_bytes: usize) -> Result<()> {
+    let off = t["offset"].as_u64().with_context(|| format!("tensor {name}: offset is not an unsigned integer"))?;
+    let shape = t["shape"].as_array().with_context(|| format!("tensor {name}: shape is not an array"))?;
+    let mut count: u64 = 1;
+    for d in shape {
+        let d = d.as_u64().with_context(|| format!("tensor {name}: shape has a non-integer dimension"))?;
+        anyhow::ensure!(d >= 1, "tensor {name}: shape has a zero dimension");
+        count = count.checked_mul(d).with_context(|| format!("tensor {name}: shape overflows"))?;
+    }
+    let end = off
+        .checked_add(count)
+        .and_then(|e| e.checked_mul(2))
+        .with_context(|| format!("tensor {name}: offset overflows"))?;
+    anyhow::ensure!(end <= n_bytes as u64, "tensor {name} runs past the end of the weight blob");
+    Ok(())
+}
+
+impl Model {
     pub fn blob(&self) -> &Blob {
         &self.blob
     }

@@ -5,6 +5,19 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-02
+
+### Fixed
+
+- The model loader checks a model completely before anything reads it: integer dimensions of at least 1, offsets and
+  sizes computed without overflow, every tensor inside the blob, every weight the graph names present (the FiLM
+  weights included), operands that are strings, repeat bodies that are lists. A malformed model directory is an
+  error with the tensor's name; it used to pass the loader and panic in the builder.
+- The browser classes refuse an option number that does not fit (`internal`, `staticProtection.frames` and
+  `tolerance`) instead of turning it into a nearby one.
+- Every C ABI function turns a panic into `fh_last_error` and its error return (null or -1); a panic that reached the
+  boundary aborted the host's process.
+
 ## [0.1.0] - 2026-11-02
 
 The first release: the engine as a library with a Rust API, a C ABI and a browser module, the reference hosts, and the

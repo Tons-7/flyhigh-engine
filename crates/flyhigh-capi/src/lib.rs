@@ -26,6 +26,23 @@ pub(crate) fn set_err(e: impl std::fmt::Display) {
     LAST_ERR.with(|l| *l.borrow_mut() = CString::new(e.to_string().replace('\0', " ")).unwrap());
 }
 
+/// Runs an exported function's body with a panic turned into `fh_last_error` and `fallback`: a panic that reached the
+/// ABI would abort the host's process.
+pub fn guard<T>(fallback: T, f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(p) => {
+            let msg = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".to_string());
+            set_err(format!("internal error: {msg}"));
+            fallback
+        }
+    }
+}
+
 /// A string into a caller buffer, NUL-terminated; bytes written (without the NUL) or -1 when `cap` is too small.
 /// # Safety
 /// `buf` points to `cap` writable bytes.
@@ -108,51 +125,55 @@ pub unsafe extern "C" fn fh_generator_create(
     m: *const Model,
     o: *const FhOptions,
 ) -> *mut FhGenerator {
-    if e.is_null() || m.is_null() || o.is_null() {
-        set_err("null argument");
-        return std::ptr::null_mut();
-    }
-    let (e, m, o) = unsafe { (&*e, &*m, &*o) };
-    let mut opts = Options::new(o.width, o.height);
-    if o.k > 0 {
-        opts.k = o.k;
-    }
-    if o.internal_w > 0 && o.internal_h > 0 {
-        opts.internal = Some((o.internal_w, o.internal_h));
-    }
-    opts.mode = if o.mode == 1 { Mode::Video } else { Mode::Realtime };
-    opts.repair = o.repair.min(2);
-    opts.cadence = o.cadence != 0;
-    opts.cubic = match o.render_sampling {
-        1 => Some(false),
-        2 => Some(true),
-        _ => None,
-    };
-    opts.keep_static = o.keep_static != 0;
-    if o.static_frames > 0 {
-        opts.static_frames = o.static_frames;
-    }
-    opts.static_tolerance = o.static_tolerance;
-    opts.fast_render = o.fast_render != 0;
-    opts.linear_t = o.linear_t != 0;
-    let engine = flyhigh_engine::api::Engine::from_core(e, m);
-    match Generator::new(&engine, opts) {
-        Ok(gen) => Box::into_raw(Box::new(FhGenerator { engine, gen, pending: VecDeque::new() })),
-        Err(err) => {
-            set_err(err);
-            std::ptr::null_mut()
+    guard(std::ptr::null_mut(), || {
+        if e.is_null() || m.is_null() || o.is_null() {
+            set_err("null argument");
+            return std::ptr::null_mut();
         }
-    }
+        let (e, m, o) = unsafe { (&*e, &*m, &*o) };
+        let mut opts = Options::new(o.width, o.height);
+        if o.k > 0 {
+            opts.k = o.k;
+        }
+        if o.internal_w > 0 && o.internal_h > 0 {
+            opts.internal = Some((o.internal_w, o.internal_h));
+        }
+        opts.mode = if o.mode == 1 { Mode::Video } else { Mode::Realtime };
+        opts.repair = o.repair.min(2);
+        opts.cadence = o.cadence != 0;
+        opts.cubic = match o.render_sampling {
+            1 => Some(false),
+            2 => Some(true),
+            _ => None,
+        };
+        opts.keep_static = o.keep_static != 0;
+        if o.static_frames > 0 {
+            opts.static_frames = o.static_frames;
+        }
+        opts.static_tolerance = o.static_tolerance;
+        opts.fast_render = o.fast_render != 0;
+        opts.linear_t = o.linear_t != 0;
+        let engine = flyhigh_engine::api::Engine::from_core(e, m);
+        match Generator::new(&engine, opts) {
+            Ok(gen) => Box::into_raw(Box::new(FhGenerator { engine, gen, pending: VecDeque::new() })),
+            Err(err) => {
+                set_err(err);
+                std::ptr::null_mut()
+            }
+        }
+    })
 }
 /// # Safety
 /// `g` is null or a handle from `fh_generator_create` that is not used afterwards.
 #[no_mangle]
 pub unsafe extern "C" fn fh_generator_destroy(g: *mut FhGenerator) {
-    if !g.is_null() {
-        unsafe {
-            drop(Box::from_raw(g));
+    guard((), || {
+        if !g.is_null() {
+            unsafe {
+                drop(Box::from_raw(g));
+            }
         }
-    }
+    })
 }
 
 /// Push one source frame (RGBA8, width*height*4 bytes). Returns the number of output frames now queued (pop them
@@ -161,22 +182,24 @@ pub unsafe extern "C" fn fh_generator_destroy(g: *mut FhGenerator) {
 /// `g` is a live handle; `rgba` points to `len` readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn fh_generator_push(g: *mut FhGenerator, rgba: *const u8, len: usize, factor: u32) -> i32 {
-    if g.is_null() || rgba.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let g = unsafe { &mut *g };
-    let frame = unsafe { std::slice::from_raw_parts(rgba, len) };
-    match g.gen.push(&g.engine, frame, factor) {
-        Ok(outs) => {
-            g.pending.extend(outs);
-            g.pending.len() as i32
+    guard(-1, || {
+        if g.is_null() || rgba.is_null() {
+            set_err("null argument");
+            return -1;
         }
-        Err(err) => {
-            set_err(err);
-            -1
+        let g = unsafe { &mut *g };
+        let frame = unsafe { std::slice::from_raw_parts(rgba, len) };
+        match g.gen.push(&g.engine, frame, factor) {
+            Ok(outs) => {
+                g.pending.extend(outs);
+                g.pending.len() as i32
+            }
+            Err(err) => {
+                set_err(err);
+                -1
+            }
         }
-    }
+    })
 }
 
 /// Pop the next output frame into `rgba` (cap >= width*height*4). Returns 1 with `phase` / `real` filled, 0 when the
@@ -191,29 +214,31 @@ pub unsafe extern "C" fn fh_generator_pop(
     phase: *mut f32,
     real: *mut i32,
 ) -> i32 {
-    if g.is_null() || rgba.is_null() {
-        set_err("null argument");
-        return -1;
-    }
-    let g = unsafe { &mut *g };
-    let Some(f) = g.pending.pop_front() else {
-        return 0;
-    };
-    if f.rgba.len() > cap {
-        set_err(format!("output buffer too small ({} needed)", f.rgba.len()));
-        g.pending.push_front(f);
-        return -1;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(f.rgba.as_ptr(), rgba, f.rgba.len());
-        if !phase.is_null() {
-            *phase = f.phase;
+    guard(-1, || {
+        if g.is_null() || rgba.is_null() {
+            set_err("null argument");
+            return -1;
         }
-        if !real.is_null() {
-            *real = f.real as i32;
+        let g = unsafe { &mut *g };
+        let Some(f) = g.pending.pop_front() else {
+            return 0;
+        };
+        if f.rgba.len() > cap {
+            set_err(format!("output buffer too small ({} needed)", f.rgba.len()));
+            g.pending.push_front(f);
+            return -1;
         }
-    }
-    1
+        unsafe {
+            std::ptr::copy_nonoverlapping(f.rgba.as_ptr(), rgba, f.rgba.len());
+            if !phase.is_null() {
+                *phase = f.phase;
+            }
+            if !real.is_null() {
+                *real = f.real as i32;
+            }
+        }
+        1
+    })
 }
 
 /// Pushes until the first push that queues frames: 1 (realtime) or 3 (video).
@@ -221,8 +246,10 @@ pub unsafe extern "C" fn fh_generator_pop(
 /// `g` is null or a live handle.
 #[no_mangle]
 pub unsafe extern "C" fn fh_generator_warmup(g: *const FhGenerator) -> i32 {
-    if g.is_null() {
-        return -1;
-    }
-    unsafe { &*g }.gen.warmup() as i32
+    guard(-1, || {
+        if g.is_null() {
+            return -1;
+        }
+        unsafe { &*g }.gen.warmup() as i32
+    })
 }
