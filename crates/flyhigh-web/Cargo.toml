@@ -1,0 +1,22 @@
+[package]
+name = "flyhigh-web"
+description = "FlyHigh Engine in the browser: the wasm-bindgen module over WebGPU"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "flyhigh_web"
+crate-type = ["cdylib"]
+
+[dependencies]
+flyhigh-engine.workspace = true
+wgpu.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "HtmlVideoElement", "ImageBitmap", "OffscreenCanvas"] }

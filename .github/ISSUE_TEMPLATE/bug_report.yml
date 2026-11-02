@@ -1,0 +1,49 @@
+name: Bug report
+description: Something the engine does wrong, slowly or not at all
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Engine version or commit
+      placeholder: v0.1.0, or the commit of main
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: API
+      options:
+        - "Rust"
+        - "C, or a binding over it"
+        - "JavaScript (browser)"
+        - "the CLI"
+        - "the example player"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: Windows 11, Chrome 156 / Firefox 159 / Vulkan / DX12, RTX 4060 Ti, driver 610.88
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: The engine's report
+      description: "`engine.report()`, `fh_engine_report_json`, or `report()` of the session / stream / pacer, as JSON. For a pacing problem, a trace from the host (`trace v1`) replays the exact session."
+      render: json
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The options you passed and what you did; a clip or two frames when the picture is wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, what happened
+    validations:
+      required: true

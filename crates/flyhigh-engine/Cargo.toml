@@ -1,0 +1,29 @@
+[package]
+name = "flyhigh-engine"
+description = "FlyHigh Engine: wgpu / WGSL frame generation (FlyHighFG network), native and browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "flyhigh_engine"
+
+[dependencies]
+flyhigh-options.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libm.workspace = true
+half.workspace = true
+anyhow.workspace = true
+
+# interop.rs: D3D11 shared textures into the Vulkan device (the handle type; the version wgpu-hal uses)
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+
+# tests/interop_d3d11.rs makes a D3D11 texture to import
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }

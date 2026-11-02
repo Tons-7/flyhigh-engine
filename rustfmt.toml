@@ -1,0 +1,5 @@
+# rustfmt defaults with width 120; `cargo fmt --check` runs in CI.
+edition = "2021"
+max_width = 120
+use_small_heuristics = "Max"
+newline_style = "Unix"

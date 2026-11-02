@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = ["crates/flyhigh-options", "crates/flyhigh-engine", "crates/flyhigh-capi", "crates/flyhigh-web", "crates/flyhigh-cli", "examples/player"]
+# flyhigh-web is the wasm32 module: `cargo build -p flyhigh-web --target wasm32-unknown-unknown`
+default-members = ["crates/flyhigh-options", "crates/flyhigh-engine", "crates/flyhigh-capi", "crates/flyhigh-cli", "examples/player"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/getflyhigh/flyhigh-engine"
+
+[workspace.dependencies]
+flyhigh-options = { path = "crates/flyhigh-options" }
+flyhigh-engine = { path = "crates/flyhigh-engine" }
+wgpu = "30"
+pollster = "1"
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+# the Pacer's decays: the same bits on every platform and in wasm, which the system libm does not give
+libm = "0.2"
+half = "2"
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[profile.release]
+opt-level = 3
+
+# the browser module: size first (the hot path is on the GPU; the wasm code only replays plans and schedules)
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"

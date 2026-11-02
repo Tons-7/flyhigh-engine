@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FlyHigh Engine: browser parity</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; background: #111; color: #ddd; }
+  canvas { max-width: 100%; border: 1px solid #333; }
+  pre { background: #1a1a1a; padding: 8px; white-space: pre-wrap; }
+  button, select, input { font: inherit; padding: 4px 8px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+</style>
+</head>
+<body>
+<h2>FlyHigh Engine: the byte path in the browser</h2>
+<p>Frames A and B (PNG), the model from <code>../models/</code>; the engine runs the same WGSL graph as the native build
+through <code>FhSession</code> and reports wall time per generated frame (write, pair, mid, readback) and GPU time
+(timestamp queries, where the adapter has them). An optional <code>ref.png</code> (native
+<code>flyhigh-dev frames A.png B.png ref.png --t 0.5 --k K --internal WxH</code> with <code>FH_GMHS=0</code>) gives the
+browser-against-native PSNR.</p>
+<div class="row">
+  <label>A <input type="file" id="fa" accept="image/*"></label>
+  <label>B <input type="file" id="fb" accept="image/*"></label>
+  <label>ref (optional) <input type="file" id="fr" accept="image/*"></label>
+  <label>K <select id="k"><option>1</option><option selected>2</option><option>3</option></select></label>
+  <label>t <input id="t" type="number" value="0.5" step="0.05" min="0.05" max="0.95" style="width:5em"></label>
+  <label>frames <input id="n" type="number" value="60" style="width:5em"></label>
+  <button id="go">load model + run</button>
+  <button id="auto">auto (fixtures/A.png, B.png, ref.png)</button>
+</div>
+<pre id="log">…</pre>
+<div class="row"><div><div>generated</div><canvas id="out"></canvas></div><div><div>|generated − ref| ×8</div><canvas id="diff"></canvas></div></div>
+<script type="module">
+import init, { FhEngine } from "./pkg/flyhigh_web.js";
+const log = (s) => { document.getElementById("log").textContent += s + "\n"; console.log(s); };
+const el = (id) => document.getElementById(id);
+
+async function loadImage(src) {   // File or URL -> { w, h, rgba: Uint8Array }
+  const url = typeof src === "string" ? src : URL.createObjectURL(src);
+  const img = new Image(); img.src = url; await img.decode();
+  const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height);
+  return { w: c.width, h: c.height, rgba: new Uint8Array(d.data.buffer) };
+}
+function psnr(a, b) {   // RGB only
+  let se = 0, n = 0;
+  for (let i = 0; i < a.length; i += 4) { for (let c = 0; c < 3; c++) { const d = a[i + c] - b[i + c]; se += d * d; n++; } }
+  const mse = se / n; return mse === 0 ? 99 : 10 * Math.log10(255 * 255 / mse);
+}
+function show(canvasId, w, h, rgba) {
+  const c = el(canvasId); c.width = w; c.height = h;
+  c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.length), w, h), 0, 0);
+}
+let engine = null, model = null;
+async function run(A, B, R) {
+  el("log").textContent = "";
+  if (!navigator.gpu) { log("navigator.gpu missing: WebGPU is not enabled in this browser"); return; }
+  if (!engine) {
+    await init();
+    const t0 = performance.now();
+    engine = await FhEngine.create({});
+    const [bin, man, graph] = await Promise.all([
+      fetch("../models/flyhighfg.bin").then(r => r.arrayBuffer()),
+      fetch("../models/flyhighfg.json").then(r => r.text()),
+      fetch("../models/graph.json").then(r => r.text())]);
+    model = engine.loadModel(graph, man, new Uint8Array(bin));
+    log(`device: ${JSON.stringify(engine.info())}`);
+    log(`model: ${JSON.stringify(model.info())}, loaded in ${(performance.now() - t0).toFixed(0)} ms (${(bin.byteLength / 1e6).toFixed(2)} MB f16)`);
+  }
+  if (A.w !== B.w || A.h !== B.h) { log("A and B differ in size"); return; }
+  const K = +el("k").value, t = +el("t").value, N = +el("n").value;
+  let t0 = performance.now();
+  // the network at the frame's own size, no repair: the configuration of the native `frames` reference (FH_GMHS=0)
+  const s = engine.session(model, { width: A.w, height: A.h, k: K, internal: "frame", repair: 0 });
+  const a = s.addInput(), b = s.addInput(), out = s.addOutput();
+  const rep = s.report();
+  log(`session: ${A.w}x${A.h} K=${K} t=${t}: ${rep.pair_steps} pair + ${rep.mid_steps} mid steps, built in ${(performance.now() - t0).toFixed(0)} ms`);
+  s.writeRgba(a, A.rgba); s.writeRgba(b, B.rgba);
+  for (let i = 0; i < 5; i++) { s.pair(a, b); s.mid(t, out); await s.readRgba(out); }   // warm-up: kernels compile on first use
+  const ts = [];
+  let result;
+  for (let i = 0; i < N; i++) {
+    const w0 = performance.now(); s.pair(a, b); s.mid(t, out); result = await s.readRgba(out); ts.push(performance.now() - w0);
+  }
+  ts.sort((x, y) => x - y);
+  log(`wall per frame (pair + mid + readback, ${N} frames): min ${ts[0].toFixed(2)} / p50 ${ts[N >> 1].toFixed(2)} / p95 ${ts[Math.floor(N * 0.95)].toFixed(2)} ms`);
+  const pairMs = await s.pairTimed(a, b), midMs = await s.midTimed(t, out);
+  log(pairMs === null ? "GPU time: no timestamp queries on this adapter" : `GPU time: pair ${pairMs.toFixed(2)} ms, generated frame ${midMs.toFixed(2)} ms`);
+  show("out", A.w, A.h, result);
+  if (R) {
+    if (R.w !== A.w || R.h !== A.h) { log("ref size differs"); return; }
+    log(`PSNR browser vs ref: ${psnr(result, R.rgba).toFixed(2)} dB`);
+    const d = new Uint8Array(result.length);
+    for (let i = 0; i < result.length; i += 4) { for (let c = 0; c < 3; c++) d[i + c] = Math.min(255, Math.abs(result[i + c] - R.rgba[i + c]) * 8); d[i + 3] = 255; }
+    show("diff", A.w, A.h, d);
+  }
+  log(`(frame repeat A vs B: ${psnr(A.rgba, B.rgba).toFixed(2)} dB, how much motion the pair has)`);
+  s.free();
+}
+el("go").onclick = async () => {
+  const fa = el("fa").files[0], fb = el("fb").files[0], fr = el("fr").files[0];
+  if (!fa || !fb) { log("pick A and B"); return; }
+  const [A, B, R] = await Promise.all([loadImage(fa), loadImage(fb), fr ? loadImage(fr) : null]);
+  await run(A, B, R).catch(e => log("error: " + e));
+};
+el("auto").onclick = async () => {
+  const [A, B] = await Promise.all([loadImage("fixtures/A.png"), loadImage("fixtures/B.png")]);
+  let R = null; try { R = await loadImage("fixtures/ref.png"); } catch (e) { log("no fixtures/ref.png"); }
+  await run(A, B, R).catch(e => log("error: " + e));
+};
+</script>
+</body>
+</html>

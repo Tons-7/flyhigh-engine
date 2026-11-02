@@ -1,0 +1,35 @@
+{
+  "format": 1,
+  "models": [
+    {
+      "id": "flyhighfg",
+      "dir": ".",
+      "name": "FlyHighFG",
+      "task": "interpolation",
+      "train_step": 110000,
+      "params": 775811,
+      "k_range": [1, 3],
+      "default_k": 2,
+      "render_sampling": "bicubic",
+      "dtype": "f16",
+      "files": ["graph.json", "flyhighfg.json", "flyhighfg.bin"],
+      "weights_license": "CC-BY-NC-4.0",
+      "parity_fixture": "fixtures/v6p",
+      "shipped": true
+    },
+    {
+      "id": "flyhighfg-v5",
+      "name": "FlyHighFG v5",
+      "task": "interpolation",
+      "note": "earlier checkpoint; +0.1 dB PSNR on anime and CS2 against the shipped model, -0.9 dB on natural video; release asset, not in git",
+      "shipped": false
+    },
+    {
+      "id": "flyhighfg-v7x",
+      "name": "FlyHighFG v7x",
+      "task": "extrapolation",
+      "note": "predicts frames ahead (the desktop insert mode, phases up to t = 3); release asset, not in git",
+      "shipped": false
+    }
+  ]
+}

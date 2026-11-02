@@ -1,0 +1,29 @@
+# cargo-deny: dependency licences, advisories and sources (CI job `deny`). Weights are licensed separately
+# (models/WEIGHTS_LICENSE.md); this covers the Rust dependency tree only.
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # ttf-parser (unmaintained) comes through winit's Wayland decorations (sctk-adwaita); it only serves the example
+    # player window, not the engine, and the fix is upstream in winit
+    { id = "RUSTSEC-2026-0192", reason = "winit -> sctk-adwaita -> ab_glyph -> ttf-parser; example player only" },
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "0BSD",
+    "Unicode-3.0", "Unicode-DFS-2016", "MPL-2.0", "CC0-1.0", "BSL-1.0", "CDLA-Permissive-2.0", "bzip2-1.0.6",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FlyHigh reference web host</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #111; color: #ddd; font: 13px/1.4 system-ui, sans-serif; }
+  header { display: flex; gap: 12px; align-items: center; padding: 8px 12px; flex-wrap: wrap; }
+  header label { display: flex; gap: 4px; align-items: center; }
+  #stage { position: relative; width: 100%; max-width: 1280px; margin: 0 auto; background: #000; }
+  #stage video, #stage canvas { display: block; width: 100%; height: auto; }
+  #stage canvas { position: absolute; left: 0; top: 0; }
+  #status { padding: 8px 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; color: #9ac; }
+  button { background: #333; color: #ddd; border: 1px solid #555; padding: 4px 10px; }
+</style>
+</head>
+<body>
+<header>
+  <label>Source <input id="src" type="text" size="40" value="../../web/fixtures/anime_1080_12m.webm"></label>
+  <label>Rate <select id="mode">
+    <option value="auto" selected>Auto</option>
+    <option value="2">2x</option><option value="3">3x</option><option value="4">4x</option>
+    <option value="display_hz">Display Hz</option>
+    <option value="target:120">120 fps</option>
+  </select></label>
+  <label>Stream <select id="smode"><option value="realtime" selected>realtime</option><option value="video">video + cadence</option></select></label>
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+  <span id="info"></span>
+</header>
+<div id="stage">
+  <video id="video" muted loop playsinline crossorigin="anonymous"></video>
+  <canvas id="canvas"></canvas>
+</div>
+<pre id="status">Loading the engine...</pre>
+<script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test:
+    name: build + tests + lints (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --all-targets
+      - run: cargo test --release
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+      # docs/options.md is generated from the option declarations; a stale file fails here
+      - run: cargo run --release -p flyhigh-cli -- options-doc --check
+      - run: cargo doc --no-deps --release
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+
+  # dependency licences, advisories and sources (deny.toml)
+  deny:
+    name: licences and advisories (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # Apple Silicon runners have a Metal GPU: the GPU tests exercise the Metal backend.
+  macos-metal:
+    name: build + GPU tests (macOS, Metal)
+    runs-on: macos-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release
+      - run: cargo test --release -- --ignored --nocapture
+
+  # Software Vulkan (lavapipe): the GPU tests and the golden plans run on it (f32 class, f16 where it has shader-f16).
+  linux-lavapipe:
+    name: GPU tests (Linux, lavapipe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+      - run: vulkaninfo --summary || true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release -- --ignored --nocapture
+      # the C ABI from its consumers: the C example (CMake), the C++ wrapper and the Python binding, all on the same GPU
+      - run: cargo build --release -p flyhigh-capi -p flyhigh-cli
+      # the bench suite end to end on the software GPU: the report's structure, not its numbers (bench/README.md)
+      - run: python3 tools/baseline.py --check --quick
+      - run: cmake -S examples/c -B build/c && cmake --build build/c
+      - run: LD_LIBRARY_PATH=target/release ./build/c/flyhigh_c_example models
+      - run: g++ -std=c++17 -Wall -Wextra -I crates/flyhigh-capi/include -I bindings/cpp bindings/cpp/example.cpp -L target/release -lflyhigh -o build/flyhigh_cpp_example
+      - run: LD_LIBRARY_PATH=target/release ./build/flyhigh_cpp_example models
+      - run: FLYHIGH_LIB=target/release/libflyhigh.so python3 bindings/python/test_flyhigh.py
+
+  # The browser module: built for wasm32, bound with the wasm-bindgen CLI that matches Cargo.lock, published as an
+  # artifact (web/pkg is not in git).
+  wasm:
+    name: browser module (wasm32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - run: sh tools/build_web.sh
+      # the size budget: 1.02 MB today with the size-first profile; a change that crosses this is a decision
+      - run: test "$(stat -c%s web/pkg/flyhigh_web_bg.wasm)" -lt 1300000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-pkg
+          path: web/pkg

@@ -1,0 +1,35 @@
+# build artifacts
+target/
+dist/
+*.exe
+*.engine
+# the browser module is built by tools/build_web.sh (CI publishes it as an artifact)
+web/pkg/
+
+# model weight blobs: the shipped model is the one exception; alternate checkpoints (models_v5/ ...) are local
+*.bin
+!models/flyhighfg.bin
+models_v*/
+
+# PyTorch fixture dumps (parity goldens, kernel cases) and media: produced by the research repo, not in git
+fixtures/
+*.mp4
+*.webm
+web/fixtures/
+web/compare/
+
+# internal benchmark / comparison harness (lives in the private research repo)
+benchmarks/
+
+# node / tooling
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+# CMake build trees of the C example
+build/
+# Python bytecode of the binding
+__pycache__/
+*.pyc

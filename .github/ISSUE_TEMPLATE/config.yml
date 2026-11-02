@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/getflyhigh/flyhigh-engine/security/advisories/new
+    about: Report a vulnerability privately (see SECURITY.md)
+  - name: Documentation
+    url: https://github.com/getflyhigh/flyhigh-engine/blob/main/docs/README.md
+    about: The guides, the options reference, the platforms matrix and the design documents

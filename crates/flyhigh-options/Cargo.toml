@@ -1,0 +1,15 @@
+[package]
+name = "flyhigh-options"
+description = "FlyHigh Engine: the Options derive (one declaration per option, the reference generated from it)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = "2"
+quote = "1"
+proc-macro2 = "1"

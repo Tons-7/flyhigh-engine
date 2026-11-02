@@ -1,0 +1,22 @@
+[package]
+name = "flyhigh-cli"
+description = "FlyHigh Engine developer tools: self-tests, quality regression, GPU timings, end-to-end runs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "flyhigh-dev"
+path = "src/main.rs"
+
+[dependencies]
+flyhigh-engine.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+serde_json.workspace = true
+half.workspace = true
+anyhow.workspace = true
+image.workspace = true
+clap = { version = "4", features = ["derive"] }

@@ -1,0 +1,99 @@
+# Release assets on a version tag (v*): the C library with its header and the tier-2 bindings for Windows, Linux and
+# macOS, the browser module, and the model files. crates.io and npm publishing stay manual until the accounts exist;
+# the assets here are what a host integrates.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  native:
+    name: C library (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, name: windows-x86_64, lib: flyhigh.dll, implib: flyhigh.dll.lib }
+          - { os: ubuntu-latest, name: linux-x86_64, lib: libflyhigh.so }
+          - { os: macos-latest, name: macos-arm64, lib: libflyhigh.dylib }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p flyhigh-capi -p flyhigh-cli
+      - name: stage
+        shell: bash
+        run: |
+          set -e
+          d=flyhigh-${GITHUB_REF_NAME}-${{ matrix.name }}
+          mkdir -p "$d/lib" "$d/include" "$d/bindings/python" "$d/bindings/cpp" "$d/models"
+          cp target/release/${{ matrix.lib }} "$d/lib/"
+          if [ -n "${{ matrix.implib }}" ]; then cp target/release/${{ matrix.implib }} "$d/lib/"; fi
+          cp target/release/flyhigh-dev* "$d/" 2>/dev/null || true
+          cp crates/flyhigh-capi/include/flyhigh.h "$d/include/"
+          cp bindings/python/flyhigh.py "$d/bindings/python/"
+          cp bindings/cpp/flyhigh.hpp "$d/bindings/cpp/"
+          cp models/graph.json models/flyhighfg.json models/flyhighfg.bin models/models.json models/WEIGHTS_LICENSE.md "$d/models/"
+          cp LICENSE NOTICE README.md "$d/"
+          cp docs/api-c.md "$d/API.md"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # the DX12 backend compiles its kernels through these (docs/platforms.md); beside the library for hosts
+            # and beside flyhigh-dev for the tools, their licences at the root with ours (NOTICE names them)
+            sh tools/fetch_dxc.sh "$d/lib"
+            mv "$d/lib/LICENSE-dxcompiler.txt" "$d/lib/LICENSE-dxil.txt" "$d/"
+            cp "$d/lib/dxcompiler.dll" "$d/lib/dxil.dll" "$d/"
+          fi
+          if [ "${{ runner.os }}" = "Windows" ]; then 7z a "$d.zip" "$d" > /dev/null; else tar czf "$d.tar.gz" "$d"; fi
+          ls -la flyhigh-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            flyhigh-*.zip
+            flyhigh-*.tar.gz
+
+  web:
+    name: browser module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - run: sh tools/build_web.sh
+      - name: stage
+        run: |
+          set -e
+          d=flyhigh-${GITHUB_REF_NAME}-web
+          mkdir -p "$d/pkg" "$d/models" "$d/example"
+          cp web/pkg/flyhigh_web.js web/pkg/flyhigh_web_bg.wasm web/pkg/flyhigh_web.d.ts web/pkg/adapters.js "$d/pkg/"
+          cp models/graph.json models/flyhighfg.json models/flyhighfg.bin models/models.json models/WEIGHTS_LICENSE.md "$d/models/"
+          cp examples/web/index.html examples/web/main.js examples/web/README.md "$d/example/"
+          cp docs/api-js.md "$d/API.md"
+          cp LICENSE NOTICE README.md "$d/"
+          tar czf "$d.tar.gz" "$d"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: flyhigh-*.tar.gz
+
+  publish:
+    name: GitHub release
+    needs: [native, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - run: ls -la assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true

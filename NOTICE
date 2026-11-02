@@ -1,0 +1,24 @@
+FlyHigh Engine
+Copyright 2026 getflyhigh (https://github.com/getflyhigh)
+
+The code in this repository (the Rust crates in crates/ and examples/, the WGSL shaders in shaders/
+and the web bindings in web/) is licensed under the Apache License, Version 2.0.
+See LICENSE.
+
+The model weights in models/ (flyhighfg.bin, flyhighfg.json, graph.json) are NOT
+covered by the Apache License. They are licensed under Creative Commons
+Attribution-NonCommercial 4.0 International (CC BY-NC 4.0): free for noncommercial
+use with attribution; commercial use of the weights requires a separate license
+from the maintainers. See models/WEIGHTS_LICENSE.md.
+
+Third-party dependencies are fetched by Cargo / wasm-bindgen and are not vendored
+in this repository; each remains under its own license (see the Cargo.toml files and
+Cargo.lock: wgpu, wasm-bindgen and the other crates listed there).
+
+The Windows release archive also carries two binaries of the DirectX Shader Compiler
+(https://github.com/microsoft/DirectXShaderCompiler), which the DX12 backend uses to
+compile its kernels; they are not part of this repository and are fetched by
+tools/fetch_dxc.sh. dxcompiler.dll is under the LLVM Release License
+(LICENSE-dxcompiler.txt in the archive); dxil.dll is under the Microsoft Software
+License Terms for the DirectX Shader Compiler (LICENSE-dxil.txt in the archive): for
+use on Windows only, redistributable with applications under those terms.

@@ -1,0 +1,16 @@
+[package]
+name = "flyhigh-capi"
+description = "FlyHigh Engine C ABI: libflyhigh (.dll / .so / .dylib / .a) and include/flyhigh.h"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "flyhigh"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+flyhigh-engine.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true

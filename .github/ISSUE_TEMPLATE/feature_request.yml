@@ -1,0 +1,33 @@
+name: Feature request
+description: Something the engine should do, or an option it should have
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do with the engine and where it falls short, with the host and the content (a game, video, capture).
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      description: Where it belongs, if you know (ARCHITECTURE.md).
+      options:
+        - "Core: frames, plans, kernels"
+        - "Stream: intervals, cuts, cadence"
+        - "Pacer: presentation and rate"
+        - "a surface: C, JavaScript, bindings"
+        - "tooling or documentation"
+        - "not sure"
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change; for an option, its default and when someone would change it.
+  - type: textarea
+    id: context
+    attributes:
+      label: Measurements or references
+      description: Numbers, traces, clips, or the design document the proposal touches.
