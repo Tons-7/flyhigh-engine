@@ -221,6 +221,21 @@ impl FhEngine {
         to_js(&self.inner.report())
     }
 
+    /// The kernels compiled so far: record them (they are the same on every site) to `precompile` them next time.
+    #[wasm_bindgen(js_name = compiledKernels)]
+    pub fn compiled_kernels(&self) -> Vec<String> {
+        self.inner.compiled_kernels().into_iter().map(String::from).collect()
+    }
+
+    /// Compiles the named kernels not compiled yet and returns how many; unknown names are skipped. Chrome compiles in
+    /// the process that composites the page and caches per site: a stream's worth at once freezes the video for about a
+    /// second on a new site. Pass a few names per animation frame (awaiting `device.queue.onSubmittedWorkDone()`
+    /// between) before `stream`, which then finds them compiled.
+    pub fn precompile(&self, names: Vec<String>) -> u32 {
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        self.inner.precompile(&names) as u32
+    }
+
     /// A model from its three files: `graph.json` text, the manifest text and the weight bytes.
     #[wasm_bindgen(js_name = loadModel)]
     pub fn load_model(&self, graph: String, manifest: String, weights: Vec<u8>) -> Result<FhModel, JsValue> {

@@ -5,6 +5,16 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-02
+
+### Added
+
+- `compiled_kernels` and `precompile` (Rust `Engine`, the browser `FhEngine` as `compiledKernels` / `precompile`): a
+  host records the kernels its configurations compile and compiles them a few per frame before the next stream opens.
+  Chrome compiles in the process that composites the page and caches per site, so opening a stream on a new site froze
+  a playing video for about a second (Framegen: three to four stalls of up to 1.1 s; one of 0.1 to 0.3 s with the
+  kernels precompiled while the pointer rests on the video).
+
 ## [0.1.2] - 2026-11-02
 
 ### Changed

@@ -111,6 +111,16 @@ impl Engine {
         }
     }
 
+    /// The kernels compiled so far (`Gpu::compiled_kernels`): what a host records to `precompile` next time.
+    pub fn compiled_kernels(&self) -> Vec<&'static str> {
+        self.gpu.compiled_kernels()
+    }
+
+    /// Compiles the named kernels not compiled yet, unknown names skipped (`Gpu::precompile`); returns how many.
+    pub fn precompile(&self, names: &[&str]) -> usize {
+        self.gpu.precompile(names)
+    }
+
     pub fn report(&self) -> EngineReport {
         EngineReport {
             device: self.info(),

@@ -82,6 +82,60 @@ pub fn make_pipe(device: &wgpu::Device, f32: bool, label: &str, src: &str, ep: &
     })
 }
 
+/// Every kernel name `kernel_source` answers, besides the cadence kernels in `gmhs::PIPES`.
+const KERNELS: &[&str] = &[
+    "conv",
+    "interp",
+    "avgpool",
+    "warp",
+    "binary",
+    "unary",
+    "luma",
+    "grad",
+    "sad",
+    "convex",
+    "film",
+    "blend",
+    "render",
+    "rgba_in",
+    "rgba_out",
+    "chcopy",
+    "blendmix",
+    "keep_static",
+    "render_tex",
+    "tex_down",
+    "keep_static_age_tex",
+    "keep_static_age",
+    "tex_in",
+    "tex_out",
+    "classify",
+    "implicit2",
+    "epilogue",
+    "fused",
+    "fused2",
+    "fused4",
+    "xshift",
+    "fdirect",
+    "fdirect32",
+    "tconv",
+    "tconv8",
+    "tconv88",
+    "tconv8p",
+    "fdirect64",
+    "skreduce",
+    "tconv32",
+    "tconv16",
+    "tconvn8",
+    "tconvm32",
+    "render_static",
+    "tex_out_bgra",
+];
+
+/// The kernel's name as the cache holds it, or None for a name that is not a kernel.
+fn kernel_name(name: &str) -> Option<&'static str> {
+    KERNELS.iter().copied().chain(crate::gmhs::PIPES.iter().map(|(k, _, _)| *k)).find(|k| *k == name)
+}
+
 /// The WGSL source and entry point of a kernel by its pipeline name. The narrow tiled-conv variants rewrite the tile
 /// constants of `conv_tiled.wgsl`, `render_static` is generated from `render.wgsl`, `tex_out_bgra` from `tex_out.wgsl`.
 /// None for a name that is not a kernel.
@@ -172,5 +226,38 @@ impl Gpu {
         }
         self.p.borrow_mut().insert(name, p.clone());
         p
+    }
+
+    /// The kernels compiled so far on this device (`pipeline`), in no particular order.
+    pub fn compiled_kernels(&self) -> Vec<&'static str> {
+        self.p.borrow().keys().copied().collect()
+    }
+
+    /// Compiles the named kernels that are not compiled yet and returns how many it compiled; a name that is not a
+    /// kernel is skipped, so a list recorded with another version of the engine stays usable. A browser compiles
+    /// pipelines in the process that also composites the page, and a whole stream's worth at once (about a second on
+    /// a site whose shader cache is cold) freezes the video playing under it: a host passes a few names per frame
+    /// instead, ahead of `Stream::open`, which then finds them compiled.
+    pub fn precompile(&self, names: &[&str]) -> usize {
+        let mut compiled = 0;
+        for k in names.iter().filter_map(|n| kernel_name(n)) {
+            if !self.p.borrow().contains_key(k) {
+                self.pipeline(k);
+                compiled += 1;
+            }
+        }
+        compiled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_listed_kernel_has_a_source() {
+        for k in super::KERNELS.iter().chain(crate::gmhs::PIPES.iter().map(|(k, _, _)| k)) {
+            assert!(super::kernel_source(k).is_some(), "{k} has no source");
+        }
+        assert_eq!(super::kernel_name("not a kernel"), None);
+        assert_eq!(super::kernel_name("classify"), Some("classify"));
     }
 }

@@ -34,6 +34,7 @@ console.log(engine.info(), model.info());                            // { name, 
 | `await FhEngine.create(options)` | the device; `{ precision: 'auto' \| 'f16' \| 'f32', tensorCores, autotune }` |
 | `engine.device()` | the `GPUDevice` |
 | `engine.info()`, `engine.report()` | the device, its kernel class, timestamp queries; kernels compiled so far, autotune entries, tensor bytes |
+| `engine.compiledKernels()`, `engine.precompile(names)` | the kernels compiled so far, and compiling named ones ahead of `stream` (unknown names skipped; returns how many it compiled). Chrome compiles in the process that composites the page and caches per site, so a stream's worth at once freezes a playing video for about a second on a new site: record `compiledKernels()` once, then `precompile` two or three names per animation frame (awaiting `device.queue.onSubmittedWorkDone()` between) before opening the stream |
 | `engine.loadModel(graphText, manifestText, weightBytes)` | an `FhModel`; the loader checks the format version and the tensor table. `model.info()`: name, training step, graph size, render sampler |
 | `engine.session(model, sessionOptions)` | an `FhSession` |
 | `engine.stream(model, sessionOptions, streamOptions)` | an `FhStream` |

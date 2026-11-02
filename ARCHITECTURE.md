@@ -401,5 +401,8 @@ more often than plain interpolation does. Hosts offer it as a choice.
   always stand for one texture view.
 - The engine creates the `GPUDevice` (or adopts the page's); hosts present, sample and copy on the same device and use
   the slot textures directly.
+- Kernels compile on first use, in the browser process that also composites the page, with a shader cache per site:
+  a host that opens a stream while a video plays precompiles the kernels it recorded before (`compiledKernels`,
+  `precompile`) a few per frame, or the video stalls for about a second on every new site.
 - Firefox needs three host rules, all in the adapter: presents at least 7 ms apart, kernels warmed up before
   playback, a submit every millisecond while a readback is pending ([docs/platforms.md](docs/platforms.md)).
