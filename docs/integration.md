@@ -27,6 +27,12 @@ Frame generation by interpolation always needs the newer frame first, so the out
 
 At 24 fps that is about 21 ms (realtime) and about 63 ms (video). Players hide it by delaying audio by the same amount.
 
+That is the floor. The Pacer's default is made for video and keeps 60 ms at least, which a player never notices and
+a hand on a mouse feels at once. Games and anything interactive turn on `low_latency`: the Pacer then keeps the delay
+at what the next in-between needs, (1 - 1/N) of a source interval plus the measured work and the arrival jitter. On a
+60 fps stream to a 240 Hz display that is 18 ms from a source frame's arrival to the screen instead of 61 (replayed with
+the work charged, no drops in Auto); 30 fps sources come out at about 31 ms, one interval being 33.
+
 ## Presenting and pacing
 
 The Pacer does this for you: feed it the display ticks, the source frames with their timestamps and kinds, and the

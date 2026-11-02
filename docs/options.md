@@ -70,6 +70,7 @@ Every heuristic of the Pacer (ARCHITECTURE.md) with its default: what to present
 | `display_headroom` | 0.97 | 0.9 to 1 | Fraction of the refresh rate the planner may use; the rest absorbs hitches. Lower on a display that drops ticks. | `display_headroom` |
 | `compute_budget` | 0.9 | 0 to 1 | Fraction of the source interval the GPU may spend per interval; the factor is capped so the measured costs fit. | `compute_budget` |
 | `delay_floor_ms` | 60 |  | The least presentation delay: how far ahead of their arrival source frames are shown, so that their in-betweens have time to be generated. | `delay_floor_ms` |
+| `low_latency` | off | on, off | For games and anything driven by a hand on a mouse: the presentation delay is the least that still lets the in-betweens be generated, (1 - 1/N) of a source interval at factor N plus the measured pair and frame cost, and the arrival jitter, instead of the video window (`delay_floor_ms`) with its 25 ms reserve. At 60 fps that is 10 to 15 ms instead of 60. Auto and a fixed factor; the exact modes keep their own delay. | `low_latency (0, 1)` |
 | `delay_max_ms` | 180 |  | The most presentation delay the controller may grow to (the exact modes may grow further, to 2500). | `delay_max_ms` |
 | `lateness_intervals` | 3 |  | How late a frame may still be shown, in output intervals; later ones are dropped for the newest due one. | `lateness_intervals` |
 | `queue_capacity` | 24 |  | Pending presentations the queue holds. | `queue_capacity` |

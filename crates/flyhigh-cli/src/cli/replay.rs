@@ -1,7 +1,7 @@
 //! Replays a `trace v1` recording through the Pacer and prints what it decided, second by second.
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
-use flyhigh_engine::pacer::trace::{replay, Trace};
+use flyhigh_engine::pacer::trace::{replay_with, Compute, Trace};
 use flyhigh_engine::pacer::PacerOptions;
 use std::path::PathBuf;
 
@@ -15,6 +15,12 @@ pub struct Args {
     /// Print the whole replay (report and per-second table) as JSON
     #[arg(long)]
     pub json: bool,
+    /// Charge this much GPU time per source frame (the pair) before its requests count as generated
+    #[arg(long)]
+    pub pair_ms: Option<f64>,
+    /// Charge this much GPU time per generated frame
+    #[arg(long)]
+    pub mid_ms: Option<f64>,
 }
 
 pub fn run(a: Args) -> Result<()> {
@@ -27,7 +33,9 @@ pub fn run(a: Args) -> Result<()> {
         }
         None => trace.options.clone().unwrap_or_default(),
     };
-    let r = replay(&trace, &opts)?;
+    let compute = (a.pair_ms.is_some() || a.mid_ms.is_some())
+        .then(|| Compute { pair_ms: a.pair_ms.unwrap_or(0.0), mid_ms: a.mid_ms.unwrap_or(0.0) });
+    let r = replay_with(&trace, &opts, compute)?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&r)?);
         return Ok(());
@@ -55,6 +63,10 @@ pub fn run(a: Args) -> Result<()> {
         c.drops_settle_exempt,
         c.late_fallbacks,
         r.report.delay_ms
+    );
+    println!(
+        "source frames on screen after arrival: mean {:.1} ms, p95 {:.1}, max {:.1} ({} frames)",
+        r.latency.mean_ms, r.latency.p95_ms, r.latency.max_ms, r.latency.frames
     );
     Ok(())
 }

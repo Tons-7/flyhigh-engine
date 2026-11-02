@@ -73,7 +73,7 @@ class PacerOptions(Structure):
                 ("recovery_after_ms", c_double), ("stall_window_ms", c_double), ("stall_rate_limit", c_double),
                 ("settle_ms", c_double), ("motion_adaptive", c_uint32), ("min_present_interval_ms", c_double),
                 ("playback_rate", c_double), ("mid_cost_seed_ms", c_double), ("pair_cost_seed_ms", c_double),
-                ("gpu_timestamps", c_uint32)]
+                ("gpu_timestamps", c_uint32), ("low_latency", c_uint32)]
 
 
 class _SourceFrame(Structure):

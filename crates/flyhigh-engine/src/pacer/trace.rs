@@ -113,6 +113,18 @@ pub struct Second {
     pub penalty: u32,
 }
 
+/// How long after its arrival each source frame reached the screen, from the third second of the trace on (the first
+/// two are the start-up): the latency frame generation adds to the picture (the host's own capture and scanout come
+/// on top).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Latency {
+    pub mean_ms: f64,
+    pub p95_ms: f64,
+    pub max_ms: f64,
+    /// Source frames presented.
+    pub frames: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Replay {
     pub report: PacerReport,
@@ -121,6 +133,15 @@ pub struct Replay {
     pub factor_max: u32,
     pub penalty_max: u32,
     pub max_late_ms: f64,
+    pub latency: Latency,
+}
+
+/// GPU time a replay charges before a requested frame counts as generated (`replay_with`): one pair per source frame,
+/// one frame per request, on a single queue.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Compute {
+    pub pair_ms: f64,
+    pub mid_ms: f64,
 }
 
 impl Replay {
@@ -134,7 +155,22 @@ impl Replay {
 /// queues the blit behind the compute, so from the scheduler's view a submitted frame is a frame) and every present
 /// happens on its tick. A pacer records such a trace itself with `Pacer::record`.
 pub fn replay(trace: &Trace, opts: &PacerOptions) -> Result<Replay, super::OptionsError> {
+    replay_with(trace, opts, None)
+}
+
+/// `replay`, optionally charging GPU time: with `compute`, a request is reported generated only once the queue has
+/// worked through the pair of its source frame and the requests before it, so a presentation delay too short for the
+/// work shows up as late fallbacks and drops.
+pub fn replay_with(
+    trace: &Trace,
+    opts: &PacerOptions,
+    compute: Option<Compute>,
+) -> Result<Replay, super::OptionsError> {
     let mut pacer = Pacer::new(opts)?;
+    let mut arrivals: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
+    let mut latencies: Vec<f64> = Vec::new();
+    let mut gpu_free = f64::NEG_INFINITY;
+    let mut done: std::collections::VecDeque<(f64, u64)> = std::collections::VecDeque::new();
     let t0 = trace.events.first().map_or(0.0, TraceEvent::t);
     let mut seconds: Vec<Second> = Vec::new();
     let mut outputs = 0u32;
@@ -142,15 +178,34 @@ pub fn replay(trace: &Trace, opts: &PacerOptions) -> Result<Replay, super::Optio
     let mut factor_max = 0;
     let mut penalty_max = 0;
     let mut max_late = 0.0f64;
-    let mut generate = |pacer: &mut Pacer, now: f64, reqs: Vec<super::Request>, sec: &mut Second| {
+    let mut generate = |pacer: &mut Pacer,
+                        now: f64,
+                        reqs: Vec<super::Request>,
+                        sec: &mut Second,
+                        done: &mut std::collections::VecDeque<(f64, u64)>,
+                        gpu_free: &mut f64| {
         for r in reqs {
             sec.requests += 1;
-            outputs = outputs.wrapping_add(1);
-            pacer.generated(now, r.id, Frame::Output(outputs));
+            match compute {
+                Some(c) => {
+                    *gpu_free = gpu_free.max(now) + c.mid_ms;
+                    done.push_back((*gpu_free, r.id));
+                }
+                None => {
+                    outputs = outputs.wrapping_add(1);
+                    pacer.generated(now, r.id, Frame::Output(outputs));
+                }
+            }
         }
     };
+    let mut next_output = 0u32;
     for e in &trace.events {
         let now = e.t();
+        while done.front().is_some_and(|(at, _)| *at <= now) {
+            let (at, id) = done.pop_front().unwrap();
+            next_output = next_output.wrapping_add(1);
+            pacer.generated(at, id, Frame::Output(u32::MAX - next_output));
+        }
         let s = ((now - t0) / 1000.0).floor().max(0.0) as usize;
         while seconds.len() <= s {
             seconds.push(Second::default());
@@ -165,6 +220,13 @@ pub fn replay(trace: &Trace, opts: &PacerOptions) -> Result<Replay, super::Optio
                         sec.mids += 1;
                     }
                     max_late = max_late.max(p.late_ms);
+                    if let (Frame::Source(id), false) = (p.frame, p.mid) {
+                        if let Some(a) = arrivals.remove(&id) {
+                            if a - t0 >= 2000.0 {
+                                latencies.push(t - a);
+                            }
+                        }
+                    }
                 }
                 sec.drops += tick.dropped as u64;
                 sec.factor = tick.factor;
@@ -172,11 +234,15 @@ pub fn replay(trace: &Trace, opts: &PacerOptions) -> Result<Replay, super::Optio
                 factor_min = factor_min.min(tick.factor);
                 factor_max = factor_max.max(tick.factor);
                 penalty_max = penalty_max.max(pacer.penalty());
-                generate(&mut pacer, t, tick.generate, sec);
+                generate(&mut pacer, t, tick.generate, sec, &mut done, &mut gpu_free);
             }
             TraceEvent::Source { t, id, pts, kind, motion, skipped } => {
+                arrivals.insert(id, t);
+                if let Some(c) = compute {
+                    gpu_free = gpu_free.max(t) + c.pair_ms;
+                }
                 let flush = pacer.source_frame(t, super::SourceFrame { id, pts_ms: pts, kind, motion, skipped });
-                generate(&mut pacer, t, flush, &mut seconds[s]);
+                generate(&mut pacer, t, flush, &mut seconds[s], &mut done, &mut gpu_free);
             }
             TraceEvent::Cost { t, stage, ms } => {
                 pacer.cost_sample(t, stage, ms);
@@ -190,5 +256,15 @@ pub fn replay(trace: &Trace, opts: &PacerOptions) -> Result<Replay, super::Optio
     if factor_min == u32::MAX {
         factor_min = 0;
     }
-    Ok(Replay { report: pacer.report(), seconds, factor_min, factor_max, penalty_max, max_late_ms: max_late })
+    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let latency = match latencies.len() {
+        0 => Latency::default(),
+        n => Latency {
+            mean_ms: latencies.iter().sum::<f64>() / n as f64,
+            p95_ms: latencies[(n * 95 / 100).min(n - 1)],
+            max_ms: latencies[n - 1],
+            frames: n as u64,
+        },
+    };
+    Ok(Replay { report: pacer.report(), seconds, factor_min, factor_max, penalty_max, max_late_ms: max_late, latency })
 }

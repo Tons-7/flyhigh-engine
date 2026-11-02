@@ -381,3 +381,66 @@ fn recorded_player_session_replays_to_the_report_the_host_wrote() {
     assert!(r.report.pair_cost_ms > 0.0 && r.report.mid_cost_ms > 0.0, "costs came from timestamp queries");
     assert_eq!((r.report.penalty, r.factor_max), (0, 6));
 }
+
+// A game streamed at 60 fps to a 240 Hz display: arrivals with 1 ms of jitter and an occasional 3 to 5 ms late frame,
+// costs as the 1080p texture path measures them. Deterministic (a fixed LCG instead of a random source).
+fn game_trace() -> flyhigh_engine::pacer::trace::Trace {
+    use flyhigh_engine::pacer::trace::{Trace, TraceEvent};
+    use flyhigh_engine::pacer::{IntervalKind, Stage};
+    let mut seed = 12345u64;
+    let mut rnd = || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut ev = Vec::new();
+    let mut tick = 1000.0;
+    while tick < 13000.0 {
+        ev.push(TraceEvent::Tick { t: tick });
+        tick += 1000.0 / 240.0;
+    }
+    for n in 0..720u32 {
+        let jitter = rnd() * 1.5 + if rnd() < 0.03 { 3.0 + 2.0 * rnd() } else { 0.0 };
+        let t = 1005.0 + n as f64 * 1000.0 / 60.0 + jitter;
+        ev.push(TraceEvent::Source {
+            t,
+            id: n,
+            pts: n as f64 * 1000.0 / 60.0,
+            kind: IntervalKind::Motion,
+            motion: Some(20.0),
+            skipped: 0,
+        });
+        if n % 10 == 0 {
+            ev.push(TraceEvent::Cost { t: t + 2.0, stage: Stage::Pair, ms: 1.5 });
+            ev.push(TraceEvent::Cost { t: t + 2.3, stage: Stage::Mid, ms: 0.3 });
+        }
+    }
+    ev.sort_by(|a, b| a.t().partial_cmp(&b.t()).unwrap());
+    let mut tr = Trace::new("synthetic game, 60 fps to 240 Hz");
+    tr.events = ev;
+    tr
+}
+
+#[test]
+fn low_latency_shows_a_game_frame_within_a_source_interval_or_so() {
+    use flyhigh_engine::pacer::trace::{replay_with, Compute};
+    use flyhigh_engine::pacer::PacerOptions;
+    let tr = game_trace();
+    let compute = Some(Compute { pair_ms: 1.5, mid_ms: 0.3 });
+    let video = replay_with(&tr, &PacerOptions::default(), compute).unwrap();
+    let game = replay_with(&tr, &PacerOptions { low_latency: true, ..PacerOptions::default() }, compute).unwrap();
+    eprintln!(
+        "source frame to screen: video {:.1} ms (p95 {:.1}), low latency {:.1} ms (p95 {:.1}); drops {} / {}",
+        video.latency.mean_ms,
+        video.latency.p95_ms,
+        game.latency.mean_ms,
+        game.latency.p95_ms,
+        video.report.counters.drops,
+        game.report.counters.drops
+    );
+    assert!(video.latency.mean_ms > 55.0, "the video default keeps its 60 ms floor");
+    assert!(game.latency.mean_ms < 20.0, "low latency: (1 - 1/N) of an interval plus the work and the jitter");
+    assert!(game.latency.p95_ms < 24.0);
+    assert_eq!(game.report.counters.drops, 0, "Auto keeps headroom: no drops for the lower delay");
+    assert!(game.report.counters.late_fallbacks <= 2, "the in-betweens are still ready in time");
+    assert!(game.seconds.iter().skip(2).all(|s| s.mids > 0), "and it still generates");
+}

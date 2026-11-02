@@ -139,6 +139,12 @@ pub struct PacerOptions {
     /// The least presentation delay: how far ahead of their arrival source frames are shown, so that their in-betweens
     /// have time to be generated.
     pub delay_floor_ms: f64,
+    /// For games and anything driven by a hand on a mouse: the presentation delay is the least that still lets the
+    /// in-betweens be generated, (1 - 1/N) of a source interval at factor N plus the measured pair and frame cost,
+    /// and the arrival jitter, instead of the video window (`delay_floor_ms`) with its 25 ms reserve. At
+    /// 60 fps that is 10 to 15 ms instead of 60. Auto and a fixed factor; the exact modes keep their own delay.
+    #[option(values = "on, off", c = "low_latency (0, 1)")]
+    pub low_latency: bool,
     /// The most presentation delay the controller may grow to (the exact modes may grow further, to 2500).
     pub delay_max_ms: f64,
     /// How late a frame may still be shown, in output intervals; later ones are dropped for the newest due one.
@@ -195,6 +201,7 @@ impl Default for PacerOptions {
             display_headroom: 0.97,
             compute_budget: 0.9,
             delay_floor_ms: 60.0,
+            low_latency: false,
             delay_max_ms: 180.0,
             lateness_intervals: 3.0,
             queue_capacity: 24,
@@ -220,6 +227,16 @@ impl Default for PacerOptions {
 pub use crate::options::OptionsError;
 
 impl PacerOptions {
+    /// The presentation delay a reset starts from: the video floor, or with `low_latency` at most 30 ms (its working
+    /// point at 30 to 60 fps sources lies below; the controller settles there within a few frames).
+    pub fn start_delay_ms(&self) -> f64 {
+        if self.low_latency {
+            self.delay_floor_ms.min(30.0)
+        } else {
+            self.delay_floor_ms
+        }
+    }
+
     pub fn validate(&self) -> Result<(), OptionsError> {
         let err = |field, reason: String| Err(OptionsError { field, reason });
         match self.mode {
@@ -460,7 +477,7 @@ impl Pacer {
             grid_next_at: 0.0,
             grid_phase_ms: 0.0,
             bridge: false,
-            delay_ms: opts.delay_floor_ms,
+            delay_ms: opts.start_delay_ms(),
             late_avg: 0.0,
             late_tail_ms: 0.0,
             late_tail_t: 0.0,
@@ -494,7 +511,7 @@ impl Pacer {
         self.queue.set_capacity(opts.queue_capacity);
         if mode_changed {
             self.control.reset(now, &self.control_opts);
-            self.delay_ms = opts.delay_floor_ms;
+            self.delay_ms = opts.start_delay_ms();
             self.reset_output_cadence(true);
         }
         Ok(())
@@ -508,7 +525,7 @@ impl Pacer {
         self.control.reset(now, &self.control_opts);
         self.reset_output_cadence(true);
         self.queue.reset();
-        self.delay_ms = self.opts.delay_floor_ms;
+        self.delay_ms = self.opts.start_delay_ms();
         self.late_avg = 0.0;
         self.late_tail_ms = 0.0;
         self.motion_avg = 0.0;
@@ -984,7 +1001,7 @@ impl Pacer {
         if self.source.push_decoded(decoded) {
             self.counters.rate_transitions += 1;
             self.reset_output_cadence(true);
-            self.delay_ms = self.opts.delay_floor_ms;
+            self.delay_ms = self.opts.start_delay_ms();
             self.prev = None;
             self.prev2 = None;
             self.source.reset_clock();
@@ -1002,17 +1019,34 @@ impl Pacer {
         let fast = measured_mid > 0.0 && measured_mid < 6.0 && self.late_avg < 3.0 && self.factor <= 3;
         let floor = if fast { self.opts.delay_floor_ms * 0.7 } else { self.opts.delay_floor_ms } + lookahead;
         let max = if exact { EXACT_DELAY_MAX_MS } else { self.opts.delay_max_ms } + lookahead;
-        let target = presentation_delay_ms(
-            exact,
-            wall_pair,
-            self.mid_cost() + self.present_cost.value(),
-            self.pair_cost(),
-            burst_pad,
-            floor,
-            max,
-        );
+        let target = if self.opts.low_latency && !exact {
+            // the first in-between after a source frame is due 1/N of an interval after it, and it needs the next
+            // frame: that frame's arrival, its pair and the in-between itself must fit before then (a frame ready a
+            // little after its due time still goes out on the next tick, within the lateness window)
+            let n = self.factor.max(2) as f64;
+            ((1.0 - 1.0 / n) * self.source.wall_ms()
+                + self.pair_cost()
+                + self.mid_cost()
+                + self.present_cost.value()
+                + self.source.arrival_late_ms()
+                + burst_pad)
+                .min(max)
+        } else {
+            presentation_delay_ms(
+                exact,
+                wall_pair,
+                self.mid_cost() + self.present_cost.value(),
+                self.pair_cost(),
+                burst_pad,
+                floor,
+                max,
+            )
+        };
         let rise = if exact { wall_pair.max(2.0) } else { 2.0 };
-        self.delay_ms += (target - self.delay_ms).clamp(-2.0, rise);
+        // low latency sits close to its target, which follows the arrival jitter: falling as fast as it rises would
+        // squeeze the presentation timeline every few frames, and at a factor that fills the display that drops frames
+        let fall = if self.opts.low_latency && !exact { 0.25 } else { 2.0 };
+        self.delay_ms += (target - self.delay_ms).clamp(-fall, rise);
 
         let sched_t = self.source.sched_t();
         let src_at = sched_t + self.delay_ms;

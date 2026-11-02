@@ -177,6 +177,10 @@ Inside, in the order a tick runs:
    anchor when the output rate is a multiple of the source rate. Factor modes: mids at k / n of the interval and the
    source frame at its arrival plus the delay. The delay target (pair lookahead in exact modes + pair cost + 2 x mid
    cost + 25 ms + burst pad, floor 60 ms, max 180 ms) sets how far ahead frames are due and moves 2 ms per frame.
+   With `low_latency` (games) the target is what the first in-between needs and no more: it is due 1/N of an
+   interval after its source frame and needs the next one, so (1 - 1/N) x interval + pair + frame + present cost +
+   the arrival jitter (a decaying envelope of how late frames come against the schedule clock) + burst pad, with no
+   floor; it rises 2 ms per frame and falls 0.25, so the jitter it follows does not squeeze the timeline.
 5. **Presentation queue** (`queue.rs`). Bounded (24), ordered by due time; one presentation per tick; the oldest entry
    inside the lateness contract (3 output intervals) is presented when the display can service the target, else the
    newest due. Entries before it are dropped and counted; entries due before the last presented one are stale. A

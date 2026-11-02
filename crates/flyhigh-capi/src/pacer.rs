@@ -39,6 +39,7 @@ pub struct FhPacerOptions {
     pub mid_cost_seed_ms: f64,
     pub pair_cost_seed_ms: f64,
     pub gpu_timestamps: u32,
+    pub low_latency: u32,
 }
 
 impl FhPacerOptions {
@@ -79,6 +80,7 @@ impl FhPacerOptions {
             mid_cost_seed_ms: o.mid_cost_seed_ms,
             pair_cost_seed_ms: o.pair_cost_seed_ms,
             gpu_timestamps: o.gpu_timestamps as u32,
+            low_latency: o.low_latency as u32,
         }
     }
 
@@ -118,6 +120,7 @@ impl FhPacerOptions {
             mid_cost_seed_ms: self.mid_cost_seed_ms,
             pair_cost_seed_ms: self.pair_cost_seed_ms,
             gpu_timestamps: self.gpu_timestamps != 0,
+            low_latency: self.low_latency != 0,
         })
     }
 }

@@ -5,6 +5,23 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-02
+
+### Added
+
+- `low_latency` (Pacer option, C `FhPacerOptions.low_latency`, JavaScript `lowLatency`): for games, the presentation
+  delay is what the next in-between needs, (1 - 1/N) of a source interval plus the measured pair, frame and present
+  cost and the arrival jitter, instead of the video default with its 60 ms floor. A 60 fps stream to a 240 Hz display:
+  a source frame reaches the screen 18 ms after its arrival instead of 61, without drops in Auto (heavy network jitter
+  22 ms, a slow GPU 23 ms, 30 fps sources 31 ms). Off by default; video keeps its behaviour.
+- Trace replays report how long source frames take from arrival to the screen, and can charge GPU time per pair and
+  per generated frame (`flyhigh-dev replay --pair-ms --mid-ms`), so a shorter delay that the work does not fit shows
+  as late frames.
+
+### Changed
+
+- `FhPacerOptions` grew a field at its end (`low_latency`): C hosts rebuild against the new header.
+
 ## [0.1.4] - 2026-11-02
 
 ### Fixed

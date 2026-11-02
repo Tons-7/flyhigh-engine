@@ -175,6 +175,8 @@ typedef struct FhPacerOptions {
     double   playback_rate;                       /* media seconds per wall second (1) */
     double   mid_cost_seed_ms, pair_cost_seed_ms; /* assumed GPU costs until measured (10, 4) */
     uint32_t gpu_timestamps;                      /* 1 (default) = the host measures GPU time, probes make sense */
+    uint32_t low_latency;                         /* 1 = games: the least presentation delay that still fits the work
+                                                     (10 to 20 ms at 60 fps instead of the video floor of 60) */
 } FhPacerOptions;
 
 typedef struct FhSourceFrame {

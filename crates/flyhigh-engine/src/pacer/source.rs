@@ -169,6 +169,7 @@ struct Transition {
 
 #[derive(Debug, Clone)]
 pub struct SourceEstimator {
+    arrival_late_ms: f64,
     decoded_ms: f64,
     samples: Vec<f64>,
     transition: Transition,
@@ -189,6 +190,7 @@ impl Default for SourceEstimator {
 impl SourceEstimator {
     pub fn new() -> Self {
         SourceEstimator {
+            arrival_late_ms: 0.0,
             decoded_ms: 42.0,
             samples: Vec::new(),
             transition: Transition::default(),
@@ -263,6 +265,11 @@ impl SourceEstimator {
         dt
     }
 
+    /// How much later than the schedule clock frames arrive: a slowly decaying envelope of the recent worst case.
+    pub fn arrival_late_ms(&self) -> f64 {
+        self.arrival_late_ms
+    }
+
     /// The PLL-smoothed schedule clock: decode jitter must not shake presentation. It follows the arrival rhythm
     /// softly (8 %) and resyncs hard on seeks and stalls (more than 80 ms off).
     pub fn advance_clock(&mut self, now: f64) -> f64 {
@@ -278,6 +285,7 @@ impl SourceEstimator {
             None => now,
         };
         self.sched_t = Some(t);
+        self.arrival_late_ms = (self.arrival_late_ms * 0.99).max((now - t).clamp(0.0, 80.0));
         t
     }
 
