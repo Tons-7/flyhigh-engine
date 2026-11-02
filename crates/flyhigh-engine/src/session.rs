@@ -82,11 +82,13 @@ pub struct SessionOptions {
     /// with (the shipped model: bicubic). Override only to compare.
     #[option(default = "the model's", values = "model, bilinear, bicubic", c = "render (0, 1, 2)")]
     pub render: RenderSampling,
-    /// Keeps what did not move still: pixels unchanged for the last `frames` source frames (a game's HUD, chat,
-    /// burnt-in subtitles, a logo) are taken from the source frames instead of being warped with the motion behind
-    /// them; `tolerance` is the largest per-channel change still counted as unchanged (0 for lossless capture, a few
-    /// levels for compressed video). On for games and screen capture, with frames 8 and tolerance 4. The first
-    /// `frames` frames after a session starts or a HUD appears are not protected yet.
+    /// Keeps what did not move still: pixels unchanged for the last `frames` source frames that also stayed put while
+    /// the picture around them moved, twice (a game's HUD, the crosshair, chat, burnt-in subtitles, a logo), are taken
+    /// from the source frames instead of being warped with the motion behind them; `tolerance` is the largest
+    /// per-channel change still counted as unchanged. On for games and screen capture with the defaults, frames 8 and
+    /// tolerance 4, which also suit streamed (compressed) video: a looser tolerance or fewer frames hold parts of the
+    /// moving picture as overlays. Nothing is protected for the first `frames` frames after a session starts or an
+    /// overlay appears, nor in the first in-between after the camera starts moving.
     #[option(
         values = "off, or frames 1 to 255 with tolerance 0 to 255",
         c = "keep_static (0, 1), static_frames, static_tolerance"

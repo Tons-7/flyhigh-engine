@@ -352,6 +352,7 @@ impl SessionExt {
                 let step = c.entry((a.0, b.0)).or_insert_with(|| {
                     let p = StaticParams::new(&self.net, self.w, self.h, self.wp, self.hp);
                     let mask: &wgpu::Buffer = self.env.get("mask").map_or(&gpu.zero, |m| &m.buf);
+                    let state = &self.env["static:state"].buf;
                     let pb = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("fh_age_params"),
                         contents: bytemuck::bytes_of(&p),
@@ -366,6 +367,7 @@ impl SessionExt {
                             wgpu::BindGroupEntry { binding: 2, resource: age.buf.as_entire_binding() },
                             wgpu::BindGroupEntry { binding: 3, resource: pb.as_entire_binding() },
                             wgpu::BindGroupEntry { binding: 4, resource: mask.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 5, resource: state.as_entire_binding() },
                         ],
                     });
                     Step::Compute {
@@ -379,6 +381,7 @@ impl SessionExt {
                                 Binding::Buffer(age.buf.size()),
                                 Binding::Params,
                                 Binding::Buffer(mask.size()),
+                                Binding::Buffer(state.size()),
                             ],
                             bytemuck::bytes_of(&p),
                         ),

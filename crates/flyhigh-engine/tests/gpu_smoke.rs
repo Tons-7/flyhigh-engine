@@ -201,6 +201,38 @@ fn keep_static_holds_a_hud_still_over_motion() {
 
 #[test]
 #[ignore]
+fn keep_static_after_a_still_camera_has_no_coincidence_ghost() {
+    let Some(e) = engine() else { return };
+    // the camera stands still for 10 frames (every pixel ages), then pans 12 px a frame under the HUD. Pixels of the
+    // moving pattern that match by coincidence must not be held as overlays in the first moving pair (they rendered as
+    // a speckled half-step ghost), and the HUD must be held again once it has stayed put over the motion twice.
+    let run = |keep: bool| {
+        let mut o = Options::new(W, H);
+        o.keep_static = keep;
+        let mut g = Generator::new(&e, o).unwrap();
+        let mut mids = Vec::new();
+        for i in 0..14 {
+            let dx = if i < 10 { 0.0 } else { (i - 9) as f32 * 12.0 };
+            let out = g.push(&e, &with_hud(frame(dx)), 2).unwrap();
+            if out.len() == 2 {
+                mids.push(out[0].rgba.clone());
+            }
+        }
+        mids
+    };
+    let (off, on) = (run(false), run(true));
+    // mids[k] is the middle of the pair (k, k + 1): the first moving pair is k = 9, its truth the pattern at 6 px
+    let truth = |k: usize| with_hud(frame(if k < 9 { 0.0 } else { (k as f32 - 9.0) * 12.0 + 6.0 }));
+    let first = (mae(&on[9], &truth(9)), mae(&off[9], &truth(9)));
+    eprintln!("first moving pair vs truth: protection on {:.2}, off {:.2}", first.0, first.1);
+    assert!(first.0 <= first.1 + 0.05, "the first moving pair is no worse with protection than without");
+    let k = on.len() - 1;
+    eprintln!("HUD after the pan: on {:.2}, off {:.2}", hud_mae(&on[k], &truth(k)), hud_mae(&off[k], &truth(k)));
+    assert!(hud_mae(&on[k], &truth(k)) < 0.5, "the HUD is held again once verified over the motion");
+}
+
+#[test]
+#[ignore]
 fn fast_render_matches_the_exact_render() {
     let Some(e) = engine() else { return };
     // above 960 px, so the network runs at the 480-line rung and the fast render applies

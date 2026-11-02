@@ -50,6 +50,18 @@ pub struct Args {
     /// emulate a host that does not push frames across a scene cut (mean |diff| > 20)
     #[arg(long)]
     pub skip_cuts: bool,
+    /// static protection on (frames 8, tolerance 4)
+    #[arg(long = "static")]
+    pub keep_static: bool,
+    /// fast render with linear t (realtime, the texture path browser hosts run)
+    #[arg(long)]
+    pub fast: bool,
+    /// static protection: unchanged frames before a pixel is protected
+    #[arg(long, default_value_t = 8)]
+    pub static_frames: u32,
+    /// static protection: largest per-channel change (0..255) still counted as unchanged
+    #[arg(long, default_value_t = 4)]
+    pub static_tolerance: u32,
 }
 
 pub fn run(cmd: Args) -> Result<()> {
@@ -109,6 +121,11 @@ pub fn run(cmd: Args) -> Result<()> {
     opts.mode = mode;
     opts.repair = repair;
     opts.cadence = cadence;
+    opts.keep_static = cmd.keep_static;
+    opts.static_frames = cmd.static_frames;
+    opts.static_tolerance = cmd.static_tolerance;
+    opts.fast_render = cmd.fast;
+    opts.linear_t = cmd.fast;
     if let Some(v) = std::env::var_os("FH_CUBIC") {
         opts.cubic = Some(v.to_string_lossy().trim() != "0");
     }

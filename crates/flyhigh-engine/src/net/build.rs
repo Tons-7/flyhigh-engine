@@ -525,6 +525,11 @@ pub fn build_network_ex(
     let static_frames = net.protecting_age();
     let static_p = StaticParams::new(net, wp, hp, wp, hp);
     let static_age = net.protects().then(|| gpu.buf(&vec![0.0; (wp * hp) as usize]));
+    // the age pass's own counters (keep_static_age.wgsl): unchanged pairs, and those with the surroundings moving
+    let static_state = static_age.as_ref().map(|_| gpu.buf(&vec![0.0; (2 * wp * hp) as usize]));
+    if let Some(st) = &static_state {
+        env.insert("static:state".into(), Tensor { buf: st.clone(), c: 2, h: hp, w: wp, c0: 0, scale: 1.0 });
+    }
     // the host's mask (`SessionExt::write_mask`); the zero buffer fills the binding when the session has none
     let mask = net.protection_mask.then(|| gpu.buf(&vec![0.0; (wp * hp) as usize]));
     if let Some(m) = &mask {
@@ -537,7 +542,7 @@ pub fn build_network_ex(
             &[&a.buf, &b.buf],
             bytemuck::bytes_of(&static_p),
             age,
-            &[mask.as_deref().unwrap_or(&gpu.zero)],
+            &[mask.as_deref().unwrap_or(&gpu.zero), static_state.as_deref().expect("state beside the age")],
             workgroups_2d(wp, hp, 1),
         ));
     }

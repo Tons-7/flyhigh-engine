@@ -5,6 +5,19 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-02
+
+### Fixed
+
+- Static protection no longer holds parts of a moving scene as overlays. After the camera stood still every pixel
+  had a high age, and in the first pairs of a fast turn the pixels that matched by coincidence (more of them with a
+  looser tolerance) were rendered as the unwarped average of the two frames: walls, palms and the edges of the weapon
+  appeared twice. A pixel is now protected only after it stayed unchanged while the picture around it moved, in two
+  pairs: the HUD and the crosshair qualify from the second in-between of a turn on. On a still-then-turn sequence
+  the first in-between of the turn rises from 32.6 to 34.9 dB (30.1 to 34.9 with frames 4 and tolerance 8), the same
+  as without protection, and the later ones keep the protected HUD (36.6 to 36.8 dB, against 35.8 without). The age
+  pass costs 0.34 ms more per source frame at 1080p.
+
 ## [0.1.3] - 2026-11-02
 
 ### Added

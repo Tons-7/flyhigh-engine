@@ -375,7 +375,13 @@ the texture is not flat. Level 2 drops the jump requirement (better on drawn con
 Pixels unchanged for `frames` source pairs (a HUD, chat, burnt-in subtitles) are taken from the source frames instead
 of being warped with the motion behind them: an age pass in the pair stage counts unchanged pairs per pixel, the
 render avoids warp sources on protected pixels, and an apply pass after the render mixes them toward the sources'
-value with a two-pair ramp. The host's protection mask (`protection_mask`, `write_mask`) enters the same age pass as
+value with a two-pair ramp. Unchanged is not enough on its own: after the camera stood still every pixel carries a
+high age, and in the first moving pair pixels of the moving picture that match by coincidence would be held as
+overlays, rendered as the unwarped average of the two frames (a half-step ghost of the whole scene, worst with a loose
+tolerance). The age pass therefore also counts the pairs in which a pixel stayed unchanged while something within
+32 px of it changed, and protects only from the second such pair: an overlay over a moving scene does that every
+pair, a coincidence does not repeat. A flat wall whose surroundings never change is never held; the network renders
+it as it is. The host's protection mask (`protection_mask`, `write_mask`) enters the same age pass as
 age 255, so it works with or without the automatic detection (`shaders/keep_static*.wgsl`).
 
 ## Cadence (video mode)
