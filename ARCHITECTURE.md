@@ -137,8 +137,13 @@ look like.
   the browser awaits. Firefox resolves them only on its GPU polls unless work is submitted; the browser adapter's
   nudge handles that.
 
+- **Camera warp.** Started by the host's first `mouse` call; each `push` then measures the frame's turn, and
+  `warp(frame, out, now)` writes the frame about to be presented, turned by the mouse motion since, into an output
+  slot (false: the warp is off, present the frame as it is). See [Camera warp](#camera-warp).
+
 Decisions: the scene-cut threshold defaults to 0.08 (20 / 255), what the CLI uses; a host may set its own preset.
-Extrapolation (intervals that look ahead, `t` > 1) is a later Stream mode.
+No extrapolation (intervals that look ahead, `t` > 1): predicted frames fail exactly when the player acts. What the
+player feels of the delay is the camera, and the camera warp brings it up to date from the input instead.
 
 ## The Pacer
 
@@ -387,6 +392,53 @@ tolerance). The age pass therefore also counts the pairs in which a pixel stayed
 pair, a coincidence does not repeat. A flat wall whose surroundings never change is never held; the network renders
 it as it is. The host's protection mask (`protection_mask`, `write_mask`) enters the same age pass as
 age 255, so it works with or without the automatic detection (`shaders/keep_static*.wgsl`).
+
+## Camera warp
+
+Interpolation shows a frame at least part of a source interval after it arrived, and the picture of a streamed or
+captured game is already late when it arrives (network, encoder, the game's own frame). A player feels that delay as
+a mouse that drags. The camera warp answers the mouse at once: the frame about to be presented is turned by the
+camera motion the mouse made since the moment the frame shows. Only the camera is brought up to date; what moves in
+the world (players, projectiles) stays where the frame had it.
+
+The host passes the mouse counts it sends to the game (`Stream::mouse`, with times on the clock of `push`'s
+timestamps, so those must be arrival times in host milliseconds) and whether the mouse is captured
+(`set_mouse_captured`: released means a cursor, a menu). Nothing else: whether the mouse turns a camera at all, how
+far and how late is measured.
+
+- **Measuring the picture.** Each pushed source frame's global shift against the previous one is searched on a
+  three-level pyramid of cell grids (`warp_cells`, `warp_shift`, `warp_refine`, `warp_best`): every candidate on the
+  coarsest (+-40 degrees of yaw, +-20 of pitch), a few cells around the result on each finer one. The grids are even
+  in angle, not in pixels: at a 106 degree view the edges of the frame move nearly three times as far as the centre
+  when the camera turns, so a flat grid mistakes a turn for a larger one; on the angular grid a turn is the same
+  shift everywhere (yaw exactly, pitch as cos(azimuth) of it, which the refinement models). The result is in pixels
+  at the centre, with a sub-cell parabola; on synthetic turns it is within 0.1 px for yaw and 0.2 px for pitch. A
+  flat or changing picture has no clear minimum and gives no shift. 0.07 ms per source frame at 1080p (RTX 4060 Ti),
+  read back 16 bytes a frame or so later; nothing waits on it.
+- **What is locked to the screen.** A weapon in hand, the HUD and a cockpit do not turn with the camera. Per 8 x 8
+  block, after each pair that turned by 4 px or more, a block that standing still explains better than the turn is
+  screen-locked (`warp_lock`); the search leaves those blocks out (otherwise they pull small turns towards zero) and
+  the render keeps their pixels.
+- **Calibration** (`warp::InputCalibrator`, pure logic). The shift between two frames is explained by the mouse
+  counts of the same interval moved back by the picture's lag. Over the last two seconds the calibrator searches the
+  lag (0 to 200 ms in 2 ms steps) whose counts explain the shifts best and fits pixels per count through the origin,
+  refitted without outliers (a cut, a mismeasured pair), every 100 ms. The warp turns on when the correlation is above
+  0.9 and the mouse is captured, and off when it falls below 0.6, at once when the host releases the mouse, and after
+  two frames in which the mouse moved and the picture did not (a menu the host did not report: up to about the lag
+  plus three frames of a wrong turn, then off).
+- **The render** (`warp_render`). Each output pixel's ray is turned back by the yaw and pitch of the turn, `shift / f`
+  radians (the gain is linear in counts, as a game's camera is), and the frame sampled there. The strip the camera
+  turned towards has no picture: it takes a blur of the frame's edge, which on recorded play looked better than a
+  stretched or a stale edge. Screen-locked blocks keep their own pixels, softened over a block. 0.06 ms at 1080p.
+
+On recorded CS2 play at 60 fps, while the camera turned more than a degree per frame, a frame turned by the true
+camera motion of one interval is 3.2 dB closer to the next frame than the frame itself (18.5 to 21.7 dB), with the
+locked mask and the blurred edge 3.3 dB over the whole frame.
+
+Limits. Rotation only: strafing and moving forward are not turned (they change the picture by depth). The field of
+view is assumed (`WarpOptions::hfov_deg`, 106 degrees, the default of most shooters); another view gets the centre
+right and the edges a little off. A game with mouse acceleration fits a single gain worse and stays off when the fit
+does.
 
 ## Cadence (video mode)
 

@@ -129,6 +129,13 @@ const KERNELS: &[&str] = &[
     "tconvm32",
     "render_static",
     "tex_out_bgra",
+    "warp_cells",
+    "warp_shift",
+    "warp_refine",
+    "warp_dilate",
+    "warp_best",
+    "warp_lock",
+    "warp_render",
 ];
 
 /// The kernel's name as the cache holds it, or None for a name that is not a kernel.
@@ -184,6 +191,13 @@ pub(crate) fn kernel_source(name: &str) -> Option<(String, &'static str)> {
         "tconv8p" => plain(include_str!("../../../../shaders/conv_tiled8p.wgsl"), "main"),
         "fdirect64" => plain(include_str!("../../../../shaders/conv_fused_direct64.wgsl"), "main"),
         "skreduce" => plain(include_str!("../../../../shaders/splitk_reduce.wgsl"), "main"),
+        "warp_cells" => plain(include_str!("../../../../shaders/warp_cells.wgsl"), "main"),
+        "warp_shift" => plain(include_str!("../../../../shaders/warp_shift.wgsl"), "main"),
+        "warp_refine" => plain(include_str!("../../../../shaders/warp_refine.wgsl"), "main"),
+        "warp_dilate" => plain(include_str!("../../../../shaders/warp_dilate.wgsl"), "main"),
+        "warp_best" => plain(include_str!("../../../../shaders/warp_best.wgsl"), "main"),
+        "warp_lock" => plain(include_str!("../../../../shaders/warp_lock.wgsl"), "main"),
+        "warp_render" => plain(include_str!("../../../../shaders/warp_render.wgsl"), "main"),
         // portable tiled conv, narrow variants for small cout: same source, different tile constants
         // (128 px x 32 ch / 256 thr, 128 x 16 / 128 thr, 128 x 8 / 64 thr) + 32 px x 64 ch / 128 thr for mid-size
         // convs that would otherwise need split-K

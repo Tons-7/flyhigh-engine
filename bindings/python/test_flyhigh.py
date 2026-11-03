@@ -74,6 +74,11 @@ def main():
             assert p.ready and p.base_slot == s0 and p.end_pts == 41.7, p
             assert not st.generate(0.0, 0), "the source frame is enough at t 0"
             assert st.generate(0.5, 0)
+            assert not st.warp(0, 0, 42.0, output=True), "no camera warp before any mouse input"
+            st.mouse(42.0, 5.0, 0.0)
+            st.set_mouse_captured(True)
+            assert not st.warp(0, 0, 43.0, output=True), "nor before the calibration holds"
+            assert st.report()["camera_warp"]["on"] is False
             print("stream:", st.report()["counters"])
         print("engine report:", engine.report())
     # the Pacer without a GPU: 120 Hz ticks, a 24 fps source, every request generated at once

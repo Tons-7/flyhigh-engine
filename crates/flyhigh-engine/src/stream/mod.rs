@@ -3,7 +3,8 @@
 //! mode), classifies each pair (scene cut, held frame, motion), keeps the cadence statistics and synthesises any
 //! phase of the current interval on request.
 //!
-//! It wraps `GenTex`, the texture-path generator, and adds timestamps and intervals, the classifier and the report.
+//! It wraps `GenTex`, the texture-path generator, and adds timestamps and intervals, the classifier, the camera warp
+//! (once the host passes mouse input) and the report.
 pub mod classify;
 
 pub use classify::{Classification, Classifier, Thresholds};
@@ -12,11 +13,12 @@ use crate::gen_tex::{GenTex, Retime, TexMode, TexOptions};
 use crate::gmhs::{PairStats, StatsRun};
 use crate::gpu::readback::Readback;
 use crate::options::Options;
+use crate::warp::{Calibration, CameraWarp, WarpOptions};
 use crate::{Blob, Engine, Gpu, Model, SessionOptions, TimedRun, TuneTable};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 /// What the interval between the previous source frame and this one holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -132,6 +134,15 @@ pub struct Push {
     pub stats_pending: bool,
 }
 
+/// A frame the host is about to present, for `Stream::warp`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown {
+    /// A source frame in its input slot (`Generated::SourceIsEnough`, or a held frame or a cut).
+    Input(usize),
+    /// A generated frame in its output slot.
+    Output(usize),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Generated {
     /// The output slot holds the frame.
@@ -152,6 +163,9 @@ pub struct StreamCounters {
     /// Classifications skipped because every readback was still in flight.
     pub classify_busy: u64,
     pub resets: u64,
+    /// Frames the camera warp turned.
+    #[serde(default)]
+    pub warped: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -168,6 +182,9 @@ pub struct StreamReport {
     pub outputs: usize,
     pub pushed: usize,
     pub counters: StreamCounters,
+    /// The camera warp's calibration; None until the host passes mouse input.
+    #[serde(default)]
+    pub camera_warp: Option<Calibration>,
 }
 
 pub struct Stream {
@@ -178,6 +195,12 @@ pub struct Stream {
     pushed: VecDeque<(usize, f64)>,
     next_in: usize,
     counters: StreamCounters,
+    /// Created by the first mouse input: a host without one pays nothing.
+    warp: Option<CameraWarp>,
+    /// The moment each slot shows, in push timestamps: inputs by their own, outputs by their interval and phase.
+    in_pts: HashMap<usize, f64>,
+    out_pts: HashMap<usize, f64>,
+    interval: Option<Interval>,
 }
 
 impl Stream {
@@ -220,6 +243,10 @@ impl Stream {
             pushed: VecDeque::new(),
             next_in: 0,
             counters: StreamCounters::default(),
+            warp: None,
+            in_pts: HashMap::new(),
+            out_pts: HashMap::new(),
+            interval: None,
         })
     }
 
@@ -258,6 +285,9 @@ impl Stream {
     pub fn add_input_texture(&mut self, tex: wgpu::Texture) -> Result<usize> {
         if let Some(c) = &mut self.classifier {
             c.forget_textures();
+        }
+        if let Some(w) = &mut self.warp {
+            w.forget_textures();
         }
         self.gen.add_input_texture(tex)
     }
@@ -357,12 +387,17 @@ impl Stream {
         while self.pushed.len() > 3 {
             self.pushed.pop_front();
         }
+        self.in_pts.insert(slot, pts);
+        if let Some(w) = &mut self.warp {
+            w.frame(gpu, (in_key(slot), &self.gen.ins[slot].1), pts);
+        }
         let interval = info.ready.then(|| {
             let i = self.pushed.iter().position(|(s, _)| *s == info.base_slot).unwrap_or(0);
             let (base, start_pts) = self.pushed[i];
             let end_pts = self.pushed.get(i + 1).map_or(pts, |(_, p)| *p);
             Interval { start_pts, end_pts, base }
         });
+        self.interval = interval;
         Ok((Push { interval, stats_pending: self.gen.has_pending_stats() }, run))
     }
 
@@ -406,6 +441,9 @@ impl Stream {
         let (written, run) =
             if timed { self.gen.generate_timed(gpu, t, out)? } else { (self.gen.generate(gpu, t, out)?, None) };
         if written {
+            if let Some(i) = self.interval {
+                self.out_pts.insert(out, i.start_pts + t as f64 * (i.end_pts - i.start_pts));
+            }
             if t <= 0.0 {
                 self.counters.retimed += 1;
             } else {
@@ -450,11 +488,78 @@ impl Stream {
         Ok(())
     }
 
-    /// A seek, a decoder gap, a new source: forget the frames, keep the plans.
+    /// A seek, a decoder gap, a new source: forget the frames, keep the plans (and the camera warp's calibration).
     pub fn reset(&mut self) {
         self.counters.resets += 1;
         self.gen.reset_history();
         self.pushed.clear();
+        self.interval = None;
+        if let Some(w) = &mut self.warp {
+            w.break_pair();
+        }
+    }
+
+    /// Mouse counts at time `t`, as the game receives them (relative input). `t` is on the clock of `push`'s
+    /// timestamps, so those must be the frames' arrival times on the host's clock in milliseconds: the camera warp
+    /// learns from the two together how many pixels a count turns the picture and how late the picture shows it. The
+    /// first call starts the warp; a host that never calls it runs none of it.
+    pub fn mouse(&mut self, gpu: &Gpu, t: f64, dx: f64, dy: f64) {
+        let (w, h) = (self.gen.opts.w, self.gen.opts.h);
+        self.warp.get_or_insert_with(|| CameraWarp::new(gpu, w, h, WarpOptions::default())).mouse(t, dx, dy);
+    }
+
+    /// Whether the host has the mouse captured (relative input turning a game camera) or released (a cursor on
+    /// screen, a menu): released holds the camera warp off at once.
+    pub fn set_mouse_captured(&mut self, captured: bool) {
+        if let Some(w) = &mut self.warp {
+            w.set_captured(captured);
+        }
+    }
+
+    /// The camera warp, once started by `mouse` (its options, measurements and calibration).
+    pub fn camera_warp(&mut self) -> Option<&mut CameraWarp> {
+        self.warp.as_mut()
+    }
+
+    /// The frame about to be presented at `now` (the clock of `mouse`), turned by the camera motion the mouse made
+    /// since the moment it shows, into output slot `out`; present `out` then. False when nothing was written (the warp
+    /// is off: no mouse input, a released mouse, a picture that does not follow the mouse, a turn under a quarter
+    /// pixel): present the frame as it is. `out` may be the frame's own output slot; once written it is not turned
+    /// again (a frame presented twice is turned again from where it came from).
+    pub fn warp(&mut self, gpu: &Gpu, frame: Shown, out: usize, now: f64) -> Result<bool> {
+        anyhow::ensure!(out < self.gen.outs.len(), "output slot {out} does not exist");
+        let Some(w) = self.warp.as_mut() else { return Ok(false) };
+        let t_frame = match frame {
+            Shown::Input(slot) => self.in_pts.get(&slot),
+            Shown::Output(slot) => self.out_pts.get(&slot),
+        };
+        let Some(&t_frame) = t_frame else { return Ok(false) };
+        let Some(shift) = w.decide(gpu, t_frame, now) else { return Ok(false) };
+        let dst = (out_key(out), &self.gen.outs[out].1);
+        match frame {
+            Shown::Input(slot) => {
+                anyhow::ensure!(slot < self.gen.ins.len(), "input slot {slot} does not exist");
+                w.render_into(gpu, (in_key(slot), &self.gen.ins[slot].1), dst, shift);
+            }
+            Shown::Output(slot) if slot != out => {
+                anyhow::ensure!(slot < self.gen.outs.len(), "output slot {slot} does not exist");
+                w.render_into(gpu, (out_key(slot), &self.gen.outs[slot].1), dst, shift);
+            }
+            Shown::Output(slot) => {
+                let turned = w.render_shift(gpu, (out_key(slot), &self.gen.outs[slot].1), shift);
+                let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                enc.copy_texture_to_texture(
+                    turned.as_image_copy(),
+                    self.gen.outs[out].0.as_image_copy(),
+                    turned.size(),
+                );
+                gpu.queue.submit(Some(enc.finish()));
+            }
+        }
+        // `out` now holds a turned frame: turning it again would turn it twice
+        self.out_pts.remove(&out);
+        self.counters.warped += 1;
+        Ok(true)
     }
 
     pub fn counters(&self) -> &StreamCounters {
@@ -476,6 +581,16 @@ impl Stream {
             outputs: self.gen.outs.len(),
             pushed: self.pushed.len(),
             counters: self.counters.clone(),
+            camera_warp: self.warp.as_ref().map(|w| w.report()),
         }
     }
+}
+
+// Bind-group ids of the camera warp: inputs and outputs in one space.
+fn in_key(slot: usize) -> usize {
+    2 * slot
+}
+
+fn out_key(slot: usize) -> usize {
+    2 * slot + 1
 }

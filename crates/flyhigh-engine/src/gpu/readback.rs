@@ -107,6 +107,27 @@ impl<T> Readback<T> {
         }
         Ok(v)
     }
+    /// The result if the mapping has completed, else the readback itself to try again later: a host that cannot await
+    /// (a render loop) checks once per frame. Native needs a device poll first for the mapping to complete.
+    pub fn try_finish(self) -> std::result::Result<Result<T>, Self> {
+        let r = self.fut.st.lock().unwrap().0.take();
+        let Some(r) = r else { return Err(self) };
+        let v = match r {
+            Err(e) => Err(anyhow::anyhow!("map_async: {e:?}")),
+            Ok(()) => {
+                let v = match self.stage.slice(..).get_mapped_range() {
+                    Ok(d) => Ok((self.decode)(&d)),
+                    Err(e) => Err(anyhow::anyhow!("mapped range: {e:?}")),
+                };
+                self.stage.unmap();
+                v
+            }
+        };
+        if let Some(done) = self.done {
+            done();
+        }
+        Ok(v)
+    }
     /// Native: poll the device and wait for the result.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn block(self, gpu: &Gpu) -> Result<T> {

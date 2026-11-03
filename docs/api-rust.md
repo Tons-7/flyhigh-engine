@@ -70,6 +70,12 @@ queries and return the `TimedRun` to await (`block(gpu)` natively) for the GPU m
 `cost_sample` takes. `stream.report()` counts pushes, pairs, mids, classifications. Details:
 [ARCHITECTURE.md](../ARCHITECTURE.md).
 
+Camera warp for games: `stream.mouse(gpu, t_ms, dx, dy)` per mouse event (on the clock of `push`'s timestamps:
+arrival times in host ms), `stream.set_mouse_captured(bool)`, and at present time
+`stream.warp(gpu, Shown::Input(slot) | Shown::Output(slot), out, now_ms)?`: true when output slot `out` holds the
+turned frame. The pieces are public for other hosts: `warp::CameraWarp` (GPU measurement and render on any textures)
+and `warp::InputCalibrator` (pure logic) ([integration guide](integration.md#input-latency-the-camera-warp)).
+
 ## Pacer
 
 ```rust

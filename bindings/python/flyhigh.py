@@ -161,6 +161,9 @@ def _load():
     f("fh_stream_read_rgba", c_int, c_void_p, c_void_p, c_uint32, POINTER(c_uint8), c_size_t)
     f("fh_stream_warm_up", c_int, c_void_p, c_void_p)
     f("fh_stream_reset", c_int, c_void_p)
+    f("fh_stream_mouse", c_int, c_void_p, c_void_p, c_double, c_double, c_double)
+    f("fh_stream_set_mouse_captured", c_int, c_void_p, c_uint32)
+    f("fh_stream_warp", c_int, c_void_p, c_void_p, c_uint32, c_uint32, c_uint32, c_double)
     f("fh_stream_report_json", c_int, c_void_p, c_char_p, c_size_t)
     f("fh_pacer_options_default", PacerOptions)
     f("fh_pacer_create", c_void_p, POINTER(PacerOptions))
@@ -509,6 +512,18 @@ class Stream:
 
     def reset(self) -> None:
         _check(_load().fh_stream_reset(self._h))
+
+    def mouse(self, t: float, dx: float, dy: float) -> None:
+        """Mouse counts at time t for the camera warp; t on the clock of push's pts (then arrival times in host ms)."""
+        _check(_load().fh_stream_mouse(self._h, self._e._h, t, dx, dy))
+
+    def set_mouse_captured(self, captured: bool) -> None:
+        _check(_load().fh_stream_set_mouse_captured(self._h, int(bool(captured))))
+
+    def warp(self, slot: int, out: int, now: float, output: bool = False) -> bool:
+        """The frame about to be presented at now (input slot, or output slot with output=True) turned by the mouse
+        motion since, into output slot out. True: present out; False: the warp is off, present the frame as it is."""
+        return _check(_load().fh_stream_warp(self._h, self._e._h, int(output), slot, out, now)) == 1
 
     def report(self) -> dict:
         return _json(_load().fh_stream_report_json, self._h)

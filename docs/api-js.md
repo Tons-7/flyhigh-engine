@@ -84,6 +84,11 @@ Stream options: `{ mode: 'realtime' | 'video', cadence, scene_cut: { threshold }
 | null, inputs, outputs }` (defaults: realtime, scene cuts on at 0.08, held frames off, four slots each).
 `generate(t, out)` returns `false` when nothing was written (t = 0 without re-timing: the source frame is enough);
 `realReplaced()`, `reset()` (seek, decoder gap), `writeMask(bytes)`, `await readRgba(out)`, `report()`, `options()`.
+Camera warp on a pointer-locked page: `mouse(performance.now(), e.movementX, e.movementY)` per `pointermove`,
+`setMouseCaptured(document.pointerLockElement !== null)` on `pointerlockchange`, and at present time
+`warp(output, slot, out, now)` (true: present output slot `out`; false: present the frame as it is). It needs `push`
+timestamps on the same clock (`performance.now()` at arrival), not media time
+([integration guide](integration.md#input-latency-the-camera-warp)).
 `pushTimed(slot, pts)` and `generateTimed(t, out)` do the same work under timestamp queries and add `cost`, a promise
 of the GPU milliseconds (`null` without timestamps, when nothing ran, or for a cadence composite): what the Pacer's `costSample` wants, for
 its probe requests and now and then otherwise (`generateTimed` returns `{ written, cost }`). In Firefox a pending

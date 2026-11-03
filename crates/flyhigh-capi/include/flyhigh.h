@@ -143,6 +143,12 @@ int          fh_stream_read_rgba(const FhStream* stream, const FhEngine* engine,
 int          fh_stream_warm_up(FhStream* stream, const FhEngine* engine);
 int          fh_stream_import_d3d11(FhStream* stream, const FhEngine* engine, intptr_t handle, uint32_t width, uint32_t height);   /* as fh_session_import_d3d11 */
 int          fh_stream_reset(FhStream* stream);                               /* seek, decoder gap */
+/* camera warp (ARCHITECTURE.md): mouse counts at t, on the clock of push's pts (then arrival times in host ms); the
+ * first call starts it. warp: the frame about to be presented at now (input slot, or output slot when output is 1)
+ * turned by the mouse motion since, into output slot out: 1 = present out, 0 = off, present the frame as it is */
+int          fh_stream_mouse(FhStream* stream, const FhEngine* engine, double t, double dx, double dy);
+int          fh_stream_set_mouse_captured(FhStream* stream, uint32_t captured);
+int          fh_stream_warp(FhStream* stream, const FhEngine* engine, uint32_t output, uint32_t slot, uint32_t out, double now);
 int          fh_stream_report_json(const FhStream* stream, char* buf, size_t cap);
 
 /* ---- Pacer: the engine's scheduler for a host with its own display loop (ARCHITECTURE.md) ----

@@ -2,7 +2,7 @@
 //! 4). Single-threaded use per handle; a failed call returns -1 or null and `fh_last_error` has the message.
 use crate::core::FhSessionOptions;
 use crate::{guard, set_err, write_json};
-use flyhigh_engine::stream::{Generated, HeldFrames, IntervalKind, Mode, SceneCut, Stream, StreamOptions};
+use flyhigh_engine::stream::{Generated, HeldFrames, IntervalKind, Mode, SceneCut, Shown, Stream, StreamOptions};
 use flyhigh_engine::{Engine, Model};
 use std::ffi::c_char;
 
@@ -490,6 +490,63 @@ pub unsafe extern "C" fn fh_stream_reset(s: *mut Stream) -> i32 {
         live!(s);
         unsafe { &mut *s }.reset();
         0
+    })
+}
+
+/// Mouse counts at time `t` for the camera warp (`Stream::mouse`): `t` on the clock of the `pts` given to
+/// `fh_stream_push`, which must then be the frames' arrival times in host milliseconds. The first call starts the warp;
+/// 0 or -1.
+/// # Safety
+/// `s` is a live handle created on `e`.
+#[no_mangle]
+pub unsafe extern "C" fn fh_stream_mouse(s: *mut Stream, e: *const Engine, t: f64, dx: f64, dy: f64) -> i32 {
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        unsafe { &mut *s }.mouse(unsafe { &*e }.gpu(), t, dx, dy);
+        0
+    })
+}
+
+/// Whether the host has the mouse captured (a game camera) or released (a cursor): released holds the camera warp
+/// off at once; 0 or -1.
+/// # Safety
+/// `s` is a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn fh_stream_set_mouse_captured(s: *mut Stream, captured: u32) -> i32 {
+    guard(-1, || {
+        live!(s);
+        unsafe { &mut *s }.set_mouse_captured(captured != 0);
+        0
+    })
+}
+
+/// The frame about to be presented at `now` turned by the mouse motion since the moment it shows, into output slot
+/// `out` (`Stream::warp`): the frame is input slot `slot` when `output` is 0, output slot `slot` otherwise (`out`
+/// itself allowed). 1 = `out` holds the turned frame, present it; 0 = the warp is off, present the frame as it is;
+/// -1 = error.
+/// # Safety
+/// `s` is a live handle created on `e`.
+#[no_mangle]
+pub unsafe extern "C" fn fh_stream_warp(
+    s: *mut Stream,
+    e: *const Engine,
+    output: u32,
+    slot: u32,
+    out: u32,
+    now: f64,
+) -> i32 {
+    guard(-1, || {
+        live!(s);
+        live!(e);
+        let frame = if output != 0 { Shown::Output(slot as usize) } else { Shown::Input(slot as usize) };
+        match unsafe { &mut *s }.warp(unsafe { &*e }.gpu(), frame, out as usize, now) {
+            Ok(w) => w as i32,
+            Err(err) => {
+                set_err(err);
+                -1
+            }
+        }
     })
 }
 

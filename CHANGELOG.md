@@ -5,6 +5,27 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-03
+
+### Added
+
+- Camera warp (`Stream::mouse`, `set_mouse_captured`, `warp`; C `fh_stream_mouse`, `fh_stream_set_mouse_captured`,
+  `fh_stream_warp`; JavaScript `mouse`, `setMouseCaptured`, `warp`; Python `mouse`, `set_mouse_captured`, `warp`):
+  for games, the frame about to be presented is turned by the camera motion the mouse made since the moment it shows,
+  so the camera answers the mouse at once however late the picture is. The host passes the mouse counts and whether
+  the mouse is captured; the Stream measures each source frame's turn and learns how many pixels a count turns the
+  picture and how late the picture shows it (on synthetic play: the lag to the millisecond, the gain within 0.1 %).
+  It holds the warp off until the fit is strong, in menus and for games whose mouse drives a cursor. A weapon in
+  hand and the HUD are detected and keep their pixels. 0.07 ms per source frame and 0.06 ms per presented frame at
+  1080p; a host that never passes the mouse runs none of it. `warp::CameraWarp` and `warp::InputCalibrator` are
+  public for hosts with their own textures.
+- `Readback::try_finish`: a readback checked once per frame instead of awaited.
+
+### Changed
+
+- Output textures are also `COPY_DST` (the warp writes a turned frame back into its slot).
+- `StreamReport` has `camera_warp` (the calibration, once started) and `counters.warped`.
+
 ## [0.2.0] - 2026-11-02
 
 ### Added

@@ -68,6 +68,12 @@ if (fh_stream_generate(st, engine, 0.5f, out) == 1) present_output(out); else pr
 returns 1 written, 0 the source frame is enough (t = 0 without re-timing). `fh_stream_read_rgba`, `fh_stream_warm_up`,
 `fh_stream_reset` (seek, decoder gap), `fh_stream_report_json`. Details: [ARCHITECTURE.md](../ARCHITECTURE.md).
 
+Camera warp (games): `fh_stream_mouse(st, engine, t_ms, dx, dy)` per mouse event, on the clock of `pts` (arrival
+times in host ms), `fh_stream_set_mouse_captured(st, 0 / 1)`, and at present time
+`fh_stream_warp(st, engine, output, slot, out, now_ms)`: the frame you would present (input slot, or output slot
+with `output` 1) turned by the mouse motion since, into output slot `out`; 1 = present `out`, 0 = present the frame
+as it is ([integration guide](integration.md#input-latency-the-camera-warp)).
+
 ## Pacer (`fh_pacer_*`)
 
 The engine's scheduler for a host with its own display loop ([ARCHITECTURE.md](../ARCHITECTURE.md)): pure logic, no clock,

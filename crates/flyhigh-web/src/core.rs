@@ -5,7 +5,7 @@
 //! on one page (each `FhEngine.create` makes a device).
 use crate::pacer::{from_js, from_js_snake, to_js};
 use flyhigh_engine::gpu::readback::Readback;
-use flyhigh_engine::stream::{Classification, Generated, Push, Stream, StreamOptions};
+use flyhigh_engine::stream::{Classification, Generated, Push, Shown, Stream, StreamOptions};
 use flyhigh_engine::{autotune, format_tune, TimedRun, TuneRequest};
 use flyhigh_engine::{
     Engine, EngineOptions, Gpu, Internal, Model, Precision, RenderSampling, Session, SessionOptions, StaticProtection,
@@ -628,6 +628,27 @@ impl FhStream {
     /// Forget the pushed frames after a seek or a decoder gap.
     pub fn reset(&self) {
         self.inner.borrow_mut().reset();
+    }
+
+    /// Mouse counts at time `t` for the camera warp (`movementX` / `movementY` of a pointer-locked page): `t` on the
+    /// clock of `push`'s `pts`, which must then be the frames' arrival times (`performance.now()`), not media time.
+    /// The first call starts the warp.
+    pub fn mouse(&self, t: f64, dx: f64, dy: f64) {
+        self.inner.borrow_mut().mouse(&self.gpu, t, dx, dy);
+    }
+
+    /// Whether the pointer is locked (a game camera) or free (a cursor): free holds the camera warp off at once.
+    #[wasm_bindgen(js_name = setMouseCaptured)]
+    pub fn set_mouse_captured(&self, captured: bool) {
+        self.inner.borrow_mut().set_mouse_captured(captured);
+    }
+
+    /// The frame about to be presented at `now` (input slot `slot`, or output slot `slot` when `output`) turned by the
+    /// mouse motion since the moment it shows, into output slot `out`. True: present `out`; false: the warp is off,
+    /// present the frame as it is.
+    pub fn warp(&self, output: bool, slot: u32, out: u32, now: f64) -> Result<bool, JsValue> {
+        let frame = if output { Shown::Output(slot as usize) } else { Shown::Input(slot as usize) };
+        self.inner.borrow_mut().warp(&self.gpu, frame, out as usize, now).map_err(err)
     }
 
     pub fn report(&self) -> Result<JsValue, JsValue> {

@@ -47,6 +47,27 @@ paces itself follows the same rules:
 - Measure the source interval from the source timestamps (media time, capture time), not from arrival times.
 - If a generated frame is not ready when it is due, skip it and show the next real frame. Never stall the source.
 
+## Input latency: the camera warp
+
+For games, pass the mouse to the Stream and present through `warp`: the camera then answers the mouse at once,
+however late the picture is (interpolation, network, encoder). Per mouse event, the counts as sent to the game, on
+the clock of `push`'s timestamps (use arrival times in host milliseconds for both):
+
+```rust
+stream.mouse(gpu, now_ms, dx, dy);                     // every relative mouse event
+stream.set_mouse_captured(captured);                   // when the host captures or releases the mouse
+// at present time, instead of presenting `frame` directly:
+if stream.warp(gpu, Shown::Output(out), out, now_ms)? { /* present out (turned) */ } else { /* present as is */ }
+```
+
+`frame` is the frame you were about to present: `Shown::Input(slot)` for a source frame, `Shown::Output(slot)` for a
+generated one; the result goes into an output slot (the same one is fine). Nothing to configure: the Stream measures
+whether the mouse turns the picture, by how much and how late, and stays off until the fit is strong (two seconds of
+play with some turning), in menus (a released mouse at once, otherwise within a few frames), and for games whose
+mouse drives a cursor. `stream.report().camera_warp` shows what it believes. Costs 0.07 ms per source frame and
+0.06 ms per presented frame at 1080p; a host that never calls `mouse` pays nothing. Rotation only
+([ARCHITECTURE.md](../ARCHITECTURE.md#camera-warp)).
+
 ## Events the host must handle
 
 | Event | Do |
@@ -58,6 +79,7 @@ paces itself follows the same rules:
 | paused video | stop pushing; nothing to generate |
 | repeated source frames (duplicates in a stream) | the Stream's `held_frames` option detects them (on for anime); otherwise push only distinct frames with their real timestamps |
 | a fullscreen change or a resize of the page | `pacer.modeChange(now)`: the reflow stall is not a GPU limit |
+| the mouse released (a menu, alt-tab, the cursor shown) and captured again | `stream.set_mouse_captured(false / true)`: the camera warp stops at once instead of within a few frames |
 
 ## Performance
 
