@@ -144,6 +144,28 @@ impl StaticParams {
         }
     }
 }
+/// near_d.wgsl / near_apply.wgsl
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct NearParams {
+    pub h: u32,
+    pub w: u32,
+    pub hq: u32,
+    pub wq: u32,
+    pub f0: u32,
+    pub fsx: f32,
+    pub fsy: f32,
+    pub _a: u32,
+}
+/// near_k.wgsl
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct NearKParams {
+    pub hq: u32,
+    pub wq: u32,
+    pub r: u32,
+    pub _a: u32,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct RenderParams {
@@ -160,7 +182,8 @@ pub struct RenderParams {
     pub cubic: u32,
     /// static protection: pixels whose age reaches this are overlays, not world (0 = off)
     pub min_age: u32,
-    pub _pad0: u32,
+    /// mode word (render.wgsl): bit 0 decisive blend, bit 1 still test
+    pub decisive: u32,
 } // flow_tq / vis_tq views; per-axis flow scale (internal-resolution mode)
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]

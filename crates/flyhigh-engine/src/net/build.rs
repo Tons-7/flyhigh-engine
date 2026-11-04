@@ -38,6 +38,7 @@ pub struct BuildCtx<'a> {
     pub t_deps: Vec<PhaseDep>, // t-dependent buffers of the plan (see `set_t`)
     pub keep_all: bool,        // FH_ALL_OUTPUTS=1: also compute oracle-only outputs
     pub cubic: bool,           // render_pix source sampler (NetOpts::cubic)
+    pub render_flags: u32,     // render_pix mode word (NetOpts::render_flags)
     pub static_age: Option<(Rc<wgpu::Buffer>, u32)>, // static protection age and protecting age (NetOpts::keep_static)
     pub discover: Option<Vec<ConvShape>>,
 } // Some: record conv shapes, pick fixed kernels (autotune discovery)
@@ -61,6 +62,7 @@ impl<'a> BuildCtx<'a> {
             t_deps: Vec::new(),
             keep_all: std::env::var_os("FH_ALL_OUTPUTS").is_some(),
             cubic: blob.render_cubic,
+            render_flags: 0,
             static_age: None,
             discover: None,
         }
@@ -348,6 +350,7 @@ pub fn build(ops: &[Value], env: &mut HashMap<String, Tensor>, plan: &mut Vec<St
                         fsx: ftq.scale,
                         fsy: ftq.scale,
                         cubic: cx.cubic,
+                        flags: cx.render_flags,
                         static_age: cx.static_age.as_ref().map(|(b, n)| (&**b, *n)),
                     },
                 )
@@ -516,6 +519,7 @@ pub fn build_network_ex(
     let mut env: HashMap<String, Tensor> = HashMap::new();
     let mut cx = BuildCtx::new(gpu, blob, k, t, ihp, iwp);
     cx.cubic = net.cubic;
+    cx.render_flags = net.render_flags();
     cx.pin(a);
     cx.pin(b);
     // static protection: the per-pixel age of static pairs, a fresh zeroed buffer outside the arena (it persists)
@@ -644,7 +648,13 @@ pub fn build_network_ex(
         let (fsx, fsy) = (ftq.scale * wp as f32 / iwp as f32, ftq.scale * hp as f32 / ihp as f32);
         let (o, s) = gpu.render_ex(
             &RenderInputs { a, b, flow: &ftq, vis: &vtq, residual: &rt },
-            &RenderOpts { fsx, fsy, cubic: net.cubic, static_age: static_age.as_deref().map(|b| (b, static_frames)) },
+            &RenderOpts {
+                fsx,
+                fsy,
+                cubic: net.cubic,
+                flags: net.render_flags(),
+                static_age: static_age.as_deref().map(|b| (b, static_frames)),
+            },
         );
         tail.extend(s);
         cx.pin(&o);

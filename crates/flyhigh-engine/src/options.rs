@@ -224,6 +224,28 @@ pub struct NetOpts {
     /// the host's protection mask (`SessionExt::write_mask`): the pixels it marks are taken from the sources like
     /// statically protected ones, with or without `keep_static`
     pub protection_mask: bool,
+    /// decisive blend in the render: where the two warped frames disagree, one of them instead of their blend
+    pub decisive: bool,
+    /// still test in the render: a pixel that stayed (a HUD over a moving world) keeps the still pixels
+    pub still: bool,
+    /// nearest-source regions after the render: where the warped frames disagree over a region, the nearer frame alone
+    pub near: bool,
+}
+/// The decisive blend: off by default (on screen its patches at a failed motion were no better than the blend's
+/// fog); FH_BLEND=decisive turns it on for comparisons.
+pub fn decisive_default() -> bool {
+    std::env::var("FH_BLEND").is_ok_and(|v| v.trim() == "decisive")
+}
+/// Nearest-source regions for hosts (Session, Stream realtime); FH_NEAR=0 turns them off for comparisons. On a flick the
+/// network cannot follow, the blend of two misplaced copies reads as fog: the nearer frame, warped, reads as a short
+/// hold.
+pub fn near_default() -> bool {
+    std::env::var("FH_NEAR").map_or(true, |v| v.trim() != "0")
+}
+/// The still test for hosts (Session, Stream realtime); FH_STILL=0 turns it off for comparisons. The model's reference
+/// render (`NetOpts::new`, the parity fixtures) has none.
+pub fn still_default() -> bool {
+    std::env::var("FH_STILL").map_or(true, |v| v.trim() != "0")
 }
 /// Default `static_tolerance`: below 4 levels a pixel counts as unchanged (lossless capture: exactly equal; video: codec noise).
 pub const DEFAULT_STATIC_TOLERANCE: u32 = 4;
@@ -244,7 +266,15 @@ impl NetOpts {
             static_tolerance: DEFAULT_STATIC_TOLERANCE,
             fast_render: false,
             protection_mask: false,
+            decisive: false,
+            still: false,
+            near: false,
         }
+    }
+    /// The render's mode word (render.wgsl / render_tex.wgsl): bit 0 decisive blend, bit 1 still test, bit 2
+    /// nearest-source regions (`ops::render`, the exact render only).
+    pub fn render_flags(&self) -> u32 {
+        self.decisive as u32 | (self.still as u32) << 1 | (self.near as u32) << 2
     }
     /// Something protects pixels: the automatic detection, the host's mask or both (the age pass runs).
     pub fn protects(&self) -> bool {

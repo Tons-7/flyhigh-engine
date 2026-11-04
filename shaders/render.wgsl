@@ -6,7 +6,15 @@ enable f16;
 // pp.cubic selects the A/B source sampler: 0 = bilinear, 1 = bicubic (cubic convolution a=-0.75,
 // per-tap border clamp = torch.grid_sample(mode="bicubic", align_corners=True, padding="border")).
 // flow/vis/R upsampling stays bilinear in both modes (the refine-head warps are bilinear too).
-struct Par { H: u32, W: u32, hq: u32, wq: u32, f0: u32, v0: u32, fsx: f32, fsy: f32, vs: f32, cubic: u32, min_age: u32, _pad0: u32 };   // flow_tq / vis_tq may be views; fsx/fsy: flow scale per axis
+// pp.decisive: where the two warped frames disagree (a motion the network could not follow), the one it trusts more
+// instead of their blend, and no residual there; a blend of two misplaced copies reads as fog, one copy reads as
+// motion. Where they agree the blend is the network's own. Bit 0 of pp.decisive.
+// Still test (pp.decisive bit 1): per pixel, two explanations of the pair compete: the pixel stayed (A and B agree in
+// place, over 3 x 3) or it moved with the network's flow (the two warped frames agree). A still overlay over a moving
+// world (HUD text, a crosshair) is explained far better by staying, but the flow lives on an 8 x 8 px grid and drags
+// it along with the world; where staying wins the in-between keeps the still pixels. Only nearly identical pixels
+// count as still (0.03 of the range), so a world the network got wrong is not frozen into a blend of two frames.
+struct Par { H: u32, W: u32, hq: u32, wq: u32, f0: u32, v0: u32, fsx: f32, fsy: f32, vs: f32, cubic: u32, min_age: u32, decisive: u32 };   // flow_tq / vis_tq may be views; fsx/fsy: flow scale per axis
 @group(0) @binding(0) var<storage, read> A: array<f16>;
 @group(0) @binding(1) var<storage, read> B: array<f16>;
 @group(0) @binding(2) var<storage, read> flow_tq: array<f16>;
@@ -106,6 +114,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let by0 = u32(max(0, min(bxy0, i32(pp.H) - 1))); let by1 = u32(max(0, min(bxy0 + 1, i32(pp.H) - 1)));
 
     let cubic = pp.cubic != 0u;
+    var ca = vec3<f32>(0.0); var cb = vec3<f32>(0.0); var cr = vec3<f32>(0.0);
     for (var c: u32 = 0u; c < 3u; c = c + 1u) {
         var wa: f32; var wb: f32;
         if (cubic) {
@@ -115,7 +124,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             wa = wa_s(c, ay0, ay1, ax0, ax1, aax, aay);
             wb = wb_s(c, by0, by1, bx0, bx1, bax, bay);
         }
-        let rc = qr(c, qy0c, qy1c, qx0c, qx1c, qfx, qfy);
-        outp[(c * pp.H + y) * pp.W + x] = f16(clamp(wa * wa_w + wb * wb_w + rc, 0.0, 1.0));
+        ca[c] = wa; cb[c] = wb; cr[c] = qr(c, qy0c, qy1c, qx0c, qx1c, qfx, qfy);
+    }
+    var bwa = wa_w; var bwb = wb_w; var rk = 1.0;
+    var stillw = 0.0;
+    var own = vec3<f32>(0.0);
+    if ((pp.decisive & 2u) != 0u) {
+        var es = 0.0;
+        for (var dy = -1; dy <= 1; dy++) { for (var dx = -1; dx <= 1; dx++) {
+            let yy = u32(clamp(i32(y) + dy, 0, i32(pp.H) - 1)); let xx = u32(clamp(i32(x) + dx, 0, i32(pp.W) - 1));
+            for (var c: u32 = 0u; c < 3u; c = c + 1u) {
+                let i = (c * pp.H + yy) * pp.W + xx;
+                es += abs(f32(A[i]) - f32(B[i]));
+            }
+        } }
+        es = es / 27.0;
+        for (var c: u32 = 0u; c < 3u; c = c + 1u) {
+            let i = (c * pp.H + y) * pp.W + x;
+            own[c] = 0.5 * (f32(A[i]) + f32(B[i]));
+        }
+        let ef = dot(abs(ca - cb), vec3<f32>(1.0 / 3.0));
+        stillw = clamp((ef - es) / 0.04, 0.0, 1.0) * select(0.0, 1.0, es < 0.03);
+    }
+    if ((pp.decisive & 1u) != 0u) {
+        let k = clamp((dot(abs(ca - cb), vec3<f32>(1.0 / 3.0)) - 0.04) / 0.08, 0.0, 1.0);
+        let pa = select(0.0, 1.0, wa_w >= wb_w);
+        bwa = mix(wa_w, pa, k); bwb = mix(wb_w, 1.0 - pa, k); rk = 1.0 - k;
+    }
+    // static hook
+    let o = clamp(mix(ca * bwa + cb * bwb + cr * rk, own, stillw), vec3<f32>(0.0), vec3<f32>(1.0));
+    for (var c: u32 = 0u; c < 3u; c = c + 1u) {
+        outp[(c * pp.H + y) * pp.W + x] = f16(o[c]);
     }
 }

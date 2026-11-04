@@ -38,8 +38,8 @@ pub use ops::conv::kernels::{ConvArgs, TiledOpts};
 pub use ops::conv::tune_cache::{format_tune, parse_tune, tune_table_from, TuneKey, TuneTable};
 pub use ops::params::{
     BinaryParams, ChannelCopyParams, ConvParams, EpilogueParams, ImplicitGemmParams, InterpParams, LumaParams,
-    PoolParams, RenderParams, RgbaParams, SadParams, Shape3Params, ShiftParams, SplitKParams, StaticParams,
-    UnaryParams, WarpParams,
+    NearKParams, NearParams, PoolParams, RenderParams, RgbaParams, SadParams, Shape3Params, ShiftParams, SplitKParams,
+    StaticParams, UnaryParams, WarpParams,
 };
 pub use ops::render::{RenderInputs, RenderOpts};
 pub use ops::step::{clone_step, plan_dump, workgroups_2d, Binding, OpOutput, Step, StepMeta};

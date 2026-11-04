@@ -31,8 +31,50 @@ fn webgpu_texture(t: &wgpu::Texture) -> Result<JsValue, JsValue> {
     t.as_webgpu().map(|t| JsValue::from(t.clone())).ok_or_else(|| JsValue::from_str("not on the WebGPU backend"))
 }
 
+thread_local! {
+    // the last element found readable and the source it had: a video keeps its origin until its source changes
+    static READABLE: RefCell<Option<(JsValue, String)>> = const { RefCell::new(None) };
+}
+
+// A cross-origin `<video>` or canvas cannot be read (it is "tainted"): WebGPU's copy then throws a SecurityError, which
+// wgpu turns into a panic that kills the module. The same read through a 1 x 1 2D canvas throws the same SecurityError
+// as an ordinary exception, so the host can react (reload the video in CORS mode) and the engine stays alive.
+fn ensure_readable(src: &wgpu::ExternalImageSource) -> Result<(), JsValue> {
+    let (el, key): (JsValue, String) = match src {
+        wgpu::ExternalImageSource::HTMLVideoElement(v) => (v.clone().into(), v.current_src()),
+        wgpu::ExternalImageSource::HTMLCanvasElement(c) => (c.clone().into(), String::new()),
+        _ => return Ok(()),
+    };
+    let known = READABLE.with(|r| r.borrow().as_ref().is_some_and(|(e, k)| js_sys::Object::is(e, &el) && *k == key));
+    if known {
+        return Ok(());
+    }
+    let canvas = web_sys::OffscreenCanvas::new(1, 1)?;
+    let ctx: web_sys::OffscreenCanvasRenderingContext2d =
+        canvas.get_context("2d")?.ok_or_else(|| JsValue::from_str("no 2d context"))?.dyn_into()?;
+    match src {
+        wgpu::ExternalImageSource::HTMLVideoElement(v) => {
+            ctx.draw_image_with_html_video_element_and_dw_and_dh(v, 0.0, 0.0, 1.0, 1.0)?
+        }
+        wgpu::ExternalImageSource::HTMLCanvasElement(c) => {
+            ctx.draw_image_with_html_canvas_element_and_dw_and_dh(c, 0.0, 0.0, 1.0, 1.0)?
+        }
+        _ => {}
+    }
+    ctx.get_image_data(0.0, 0.0, 1.0, 1.0)?;
+    READABLE.with(|r| *r.borrow_mut() = Some((el, key)));
+    Ok(())
+}
+
 /// A video, canvas or ImageBitmap frame into an rgba8 texture of `w` x `h`.
-fn copy_external(gpu: &Gpu, texture: &wgpu::Texture, w: u32, h: u32, src: wgpu::ExternalImageSource) {
+fn copy_external(
+    gpu: &Gpu,
+    texture: &wgpu::Texture,
+    w: u32,
+    h: u32,
+    src: wgpu::ExternalImageSource,
+) -> Result<(), JsValue> {
+    ensure_readable(&src)?;
     gpu.queue.copy_external_image_to_texture(
         &wgpu::CopyExternalImageSourceInfo { source: src, origin: wgpu::Origin2d::ZERO, flip_y: false },
         wgpu::CopyExternalImageDestInfo {
@@ -45,6 +87,7 @@ fn copy_external(gpu: &Gpu, texture: &wgpu::Texture, w: u32, h: u32, src: wgpu::
         },
         wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
     );
+    Ok(())
 }
 
 fn rgba_promise(rb: Readback<Vec<u8>>) -> js_sys::Promise {
@@ -328,8 +371,7 @@ impl FhSession {
             return Err(JsValue::from_str("bad input slot"));
         }
         let o = self.inner.options();
-        copy_external(&self.gpu, self.inner.input_texture(slot as usize), o.width, o.height, src);
-        Ok(())
+        copy_external(&self.gpu, self.inner.input_texture(slot as usize), o.width, o.height, src)
     }
 
     /// Copies a frame into an input slot (sizes must match). Firefox rejects `<video>` sources: blit through
@@ -470,8 +512,7 @@ impl FhStream {
             return Err(JsValue::from_str("bad input slot"));
         }
         let o = s.tex_options();
-        copy_external(&self.gpu, s.input_texture(slot as usize), o.w, o.h, src);
-        Ok(())
+        copy_external(&self.gpu, s.input_texture(slot as usize), o.w, o.h, src)
     }
 
     /// Copies a frame into an input slot. Firefox rejects `<video>` sources: blit through `importExternalTexture`

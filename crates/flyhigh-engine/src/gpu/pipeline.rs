@@ -5,7 +5,8 @@ use std::rc::Rc;
 
 // render.wgsl with static protection (keep_static.wgsl): a warp source within 1 px of a protected pixel (age >= min_age) is
 // an overlay, not the moving world, so it is not used: the other frame's source is taken alone, and when both land on
-// protected pixels the pixel keeps the unwarped average of the two frames; the residual is dropped there too.
+// protected pixels the pixel keeps the unwarped average of the two frames; the residual is dropped there too. The rule
+// goes in at render.wgsl's "static hook", after the (soft or decisive) blend weights.
 pub(crate) fn render_static_src() -> String {
     let src = include_str!("../../../../shaders/render.wgsl");
     let helper = "@group(0) @binding(7) var<storage, read> age: array<f16>;\n\
@@ -16,21 +17,19 @@ fn on_static(gx: f32, gy: f32) -> bool {\n\
     } }\n\
     return false;\n\
 }\n";
-    let pre = "    let sa = on_static(gxa, gya); let sb = on_static(gxb, gyb);\n\
-    var wa_k = wa_w; var wb_k = wb_w; var r_k = 1.0; var raw = 0.0;\n\
-    if (sa && sb) { r_k = 0.0; raw = 1.0; } else if (sa) { r_k = 0.0; wa_k = 0.0; wb_k = 1.0; } else if (sb) { r_k = 0.0; wa_k = 1.0; wb_k = 0.0; }\n\
-    let cubic = pp.cubic != 0u;";
-    let out_old = "        outp[(c * pp.H + y) * pp.W + x] = f16(clamp(wa * wa_w + wb * wb_w + rc, 0.0, 1.0));";
-    let out_new = "        let o = (c * pp.H + y) * pp.W + x;\n\
-        outp[o] = f16(clamp(mix(wa * wa_k + wb * wb_k + rc * r_k, 0.5 * (f32(A[o]) + f32(B[o])), raw), 0.0, 1.0));";
+    let hook = "    // static hook\n";
+    let rule = "    let sa = on_static(gxa, gya); let sb = on_static(gxb, gyb);\n\
+    var raw = 0.0;\n\
+    if (sa && sb) { rk = 0.0; raw = 1.0; } else if (sa) { rk = 0.0; bwa = 0.0; bwb = 1.0; } else if (sb) { rk = 0.0; bwa = 1.0; bwb = 0.0; }\n";
+    let out_old = "        outp[(c * pp.H + y) * pp.W + x] = f16(o[c]);";
+    let out_new = "        let i = (c * pp.H + y) * pp.W + x;\n\
+        outp[i] = f16(clamp(mix(o[c], 0.5 * (f32(A[i]) + f32(B[i])), raw), 0.0, 1.0));";
     let anchor = "@group(0) @binding(6) var<uniform> pp: Par;\n";
     assert!(
-        src.contains(anchor) && src.contains("    let cubic = pp.cubic != 0u;") && src.contains(out_old),
+        src.contains(anchor) && src.contains(hook) && src.contains(out_old),
         "render.wgsl changed: update render_static_src"
     );
-    src.replace(anchor, &format!("{anchor}{helper}"))
-        .replace("    let cubic = pp.cubic != 0u;", pre)
-        .replace(out_old, out_new)
+    src.replace(anchor, &format!("{anchor}{helper}")).replace(hook, rule).replace(out_old, out_new)
 }
 
 /// The f32 variant of a shader: tensors are f16 everywhere in the sources, so the type is swapped as a whole word and
@@ -136,6 +135,10 @@ const KERNELS: &[&str] = &[
     "warp_best",
     "warp_lock",
     "warp_render",
+    "near_d",
+    "near_k",
+    "near_t",
+    "near_apply",
 ];
 
 /// The kernel's name as the cache holds it, or None for a name that is not a kernel.
@@ -197,6 +200,10 @@ pub(crate) fn kernel_source(name: &str) -> Option<(String, &'static str)> {
         "warp_dilate" => plain(include_str!("../../../../shaders/warp_dilate.wgsl"), "main"),
         "warp_best" => plain(include_str!("../../../../shaders/warp_best.wgsl"), "main"),
         "warp_lock" => plain(include_str!("../../../../shaders/warp_lock.wgsl"), "main"),
+        "near_d" => plain(include_str!("../../../../shaders/near_d.wgsl"), "main"),
+        "near_k" => plain(include_str!("../../../../shaders/near_k.wgsl"), "main"),
+        "near_t" => plain(include_str!("../../../../shaders/near_t.wgsl"), "main"),
+        "near_apply" => plain(include_str!("../../../../shaders/near_apply.wgsl"), "main"),
         "warp_render" => plain(include_str!("../../../../shaders/warp_render.wgsl"), "main"),
         // portable tiled conv, narrow variants for small cout: same source, different tile constants
         // (128 px x 32 ch / 256 thr, 128 x 16 / 128 thr, 128 x 8 / 64 thr) + 32 px x 64 ch / 128 thr for mid-size

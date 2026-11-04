@@ -60,7 +60,7 @@ struct RenderTexParams {
     sb: f32,
     sr: f32,
     cubic: u32,
-    _a: u32,
+    decisive: u32,
     _b: u32,
     _c: u32,
 }
@@ -189,7 +189,7 @@ impl SessionExt {
                 sb: 1.0,
                 sr: 1.0,
                 cubic: self.net.cubic as u32,
-                _a: 0,
+                decisive: self.net.render_flags(),
                 _b: 0,
                 _c: 0,
             };

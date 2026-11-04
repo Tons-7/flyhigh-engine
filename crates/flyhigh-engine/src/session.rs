@@ -190,6 +190,9 @@ impl SessionOptions {
             static_tolerance: s.tolerance,
             fast_render: self.fast_render,
             protection_mask: self.protection_mask,
+            decisive: crate::options::decisive_default(),
+            still: crate::options::still_default(),
+            near: crate::options::near_default(),
         }
     }
 

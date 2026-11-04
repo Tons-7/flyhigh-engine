@@ -208,6 +208,10 @@ impl GenTex {
             static_tolerance: opts.static_tolerance,
             fast_render: opts.fast_render && opts.mode == TexMode::Realtime,
             protection_mask: opts.protection_mask,
+            // games (realtime); video and anime keep the soft blend until it is measured there
+            decisive: crate::options::decisive_default() && opts.mode == TexMode::Realtime,
+            still: crate::options::still_default() && opts.mode == TexMode::Realtime,
+            near: crate::options::near_default() && opts.mode == TexMode::Realtime,
         };
         let mut sess = Vec::new();
         for _ in 0..n_sess {

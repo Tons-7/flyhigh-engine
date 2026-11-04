@@ -8,7 +8,9 @@ enable f16;
 // flow_tq / vis_tq / R_t: the network's quarter-resolution maps over the padded plane (wp x hp); R_t is BGR.
 // sa / sb / sr: linear-t reuse of maps computed at t = 0.5 (option linear_t): the flows to A and B scale by 2t and
 // 2(1 - t), the blend leans towards the nearer frame, the residual fades out towards the source frames; 1 / 1 / 1 = as computed.
-struct Par { w: u32, h: u32, wp: u32, hp: u32, hq: u32, wq: u32, f0: u32, v0: u32, fsx: f32, fsy: f32, vs: f32, min_age: f32, use_static: u32, sa: f32, sb: f32, sr: f32, cubic: u32, _a: u32, _b: u32, _c: u32 };
+// decisive bit 0: where the two warped frames disagree, the one the network trusts more instead of their blend;
+// bit 1: the still test (render.wgsl).
+struct Par { w: u32, h: u32, wp: u32, hp: u32, hq: u32, wq: u32, f0: u32, v0: u32, fsx: f32, fsy: f32, vs: f32, min_age: f32, use_static: u32, sa: f32, sb: f32, sr: f32, cubic: u32, decisive: u32, _b: u32, _c: u32 };
 @group(0) @binding(0) var tex_a: texture_2d<f32>;
 @group(0) @binding(1) var tex_b: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -81,12 +83,33 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var wa = (e0 + 0.5 * e2) / s * (2.0 - pp.sa); var wb = (e1 + 0.5 * e2) / s * (2.0 - pp.sb);
     let wn = max(wa + wb, 1e-6); wa = wa / wn; wb = wb / wn;
     var r_k = pp.sr; var raw = 0.0;
+    let ca = sample(tex_a, gxa, gya); let cb = sample(tex_b, gxb, gyb);
+    var stillw = 0.0;
+    if ((pp.decisive & 2u) != 0u) {
+        var es = 0.0;
+        for (var dy = -1; dy <= 1; dy++) { for (var dx = -1; dx <= 1; dx++) {
+            let q = vec2<i32>(clamp(i32(x) + dx, 0, i32(pp.w) - 1), clamp(i32(y) + dy, 0, i32(pp.h) - 1));
+            es += dot(abs(textureLoad(tex_a, q, 0).rgb - textureLoad(tex_b, q, 0).rgb), vec3<f32>(1.0 / 3.0));
+        } }
+        es = es / 9.0;
+        let ef = dot(abs(ca - cb), vec3<f32>(1.0 / 3.0));
+        stillw = clamp((ef - es) / 0.04, 0.0, 1.0) * select(0.0, 1.0, es < 0.03);
+    }
+    if ((pp.decisive & 1u) != 0u) {
+        let k = clamp((dot(abs(ca - cb), vec3<f32>(1.0 / 3.0)) - 0.04) / 0.08, 0.0, 1.0);
+        let pa = select(0.0, 1.0, wa >= wb);
+        wa = mix(wa, pa, k); wb = mix(wb, 1.0 - pa, k); r_k = r_k * (1.0 - k);
+    }
     if (pp.use_static != 0u) {
         let sa = on_static(gxa, gya); let sb = on_static(gxb, gyb);
         if (sa && sb) { r_k = 0.0; raw = 1.0; } else if (sa) { r_k = 0.0; wa = 0.0; wb = 1.0; } else if (sb) { r_k = 0.0; wa = 1.0; wb = 0.0; }
     }
     let res = vec3<f32>(q(2u, 2u, y0, y1, x0, x1, fx, fy), q(2u, 1u, y0, y1, x0, x1, fx, fy), q(2u, 0u, y0, y1, x0, x1, fx, fy));   // BGR -> RGB
-    var c = sample(tex_a, gxa, gya) * wa + sample(tex_b, gxb, gyb) * wb + res * r_k;
+    var c = ca * wa + cb * wb + res * r_k;
+    if (stillw > 0.0) {
+        let here = vec2<i32>(i32(x), i32(y));
+        c = mix(c, 0.5 * (textureLoad(tex_a, here, 0).rgb + textureLoad(tex_b, here, 0).rgb), stillw);
+    }
     if (pp.use_static != 0u) {
         let own = 0.5 * (textureLoad(tex_a, vec2<i32>(i32(x), i32(y)), 0).rgb + textureLoad(tex_b, vec2<i32>(i32(x), i32(y)), 0).rgb);
         c = mix(c, own, raw);

@@ -5,6 +5,34 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-04
+
+### Changed
+
+- Realtime sessions and streams (games) finish the in-between with two per-pixel decisions on the exact render:
+  - Still test: where the two source frames agree in place better than the frames warped by the network's flow
+    agree with each other, the pixel stayed (HUD text, a crosshair, icons over a moving world) and keeps the still
+    pixels. The flow lives on an 8 x 8 px grid and dragged thin overlays along with the world. HUD region on held-out
+    CS2 with a synthetic HUD: 27.5 to 30.1 dB (Lossless Scaling's LSFG 3.1: 31.1), ahead of it on any motion over
+    5 px.
+  - Nearest-source regions: where the warped frames disagree over a region (a flick the network cannot follow), the
+    in-between there is the nearer source frame alone, warped by the network's flow, decided once per frame. The
+    blend of two misplaced copies read as a milky fog with double outlines; now a flick shows sharp frames and a short
+    hold. Held-out CS2 flicks (over 60 px per 60 fps frame) keep 0.885 of the real frames' local contrast instead of
+    0.60 (LSFG 0.89); PSNR and LPIPS, which reward the blend, drop.
+  Together 0.47 ms more per generated 1080p frame on an RTX 4060 Ti at worst (the nearest-source passes act only where
+  the warped frames disagree). Video mode keeps the plain render. `FH_STILL=0` / `FH_NEAR=0` in the environment turn
+  them off for comparisons; `FH_BLEND=decisive` tries a per-pixel choice between the warped frames (not the default:
+  its patches read no better than the fog).
+
+### Fixed
+
+- Browser: pushing a cross-origin `<video>` or canvas the page cannot read (a "tainted" source, for example a video
+  from another domain without CORS) no longer kills the module. WebGPU's copy throws a SecurityError there, which
+  wgpu turned into a panic (`RuntimeError: unreachable`) after which every call failed; `pushVideo` / `pushCanvas`
+  now throw that SecurityError as an ordinary exception and the engine keeps working, so a host can reload the video
+  in CORS mode and go on.
+
 ## [0.3.0] - 2026-11-03
 
 ### Added

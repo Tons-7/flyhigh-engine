@@ -440,6 +440,27 @@ view is assumed (`WarpOptions::hfov_deg`, 106 degrees, the default of most shoot
 right and the edges a little off. A game with mouse acceleration fits a single gain worse and stays off when the fit
 does.
 
+## Where the network fails: the render's last decisions
+
+The network describes the in-between as two flows and a blend; where its motion is wrong, that blend of two misplaced
+copies is what the viewer sees: a milky fog with double outlines on a flick, a HUD smeared with the world moving
+under it. Realtime sessions and streams therefore end the exact render with two decisions the network cannot make on
+its 8 x 8 px flow grid:
+
+- **Still test** (render.wgsl, render_tex.wgsl): per pixel, "it stayed" (the two source frames agree in place, over
+  3 x 3) against "it moved with the flow" (the two warped frames agree). A still overlay wins by far and keeps the
+  still pixels; only nearly identical pixels count as still, so a world the network got wrong is not frozen into a
+  blend.
+- **Nearest-source regions** (near_d, near_k, near_t, near_apply): where the warped frames disagree over a region
+  (about 28 px, so regions decide together), the in-between there is the nearer source frame alone, warped by the
+  network's own flow. Which frame is nearer is decided once per frame from the flows (near_t), so neighbouring regions
+  never come from different frames. On a flick the viewer sees sharp frames and a short hold instead of fog; a
+  per-pixel choice between the frames was tried and read as patches.
+
+Both are measured with the local contrast an in-between keeps against the real frame, not PSNR or LPIPS, which reward
+the blend that reads as fog. Video mode keeps the plain render. `FH_STILL=0` and `FH_NEAR=0` turn them off for
+comparisons.
+
 ## Cadence (video mode)
 
 Anime often holds each drawing for two or more frames while the camera pans on every frame. Interpolating such a
