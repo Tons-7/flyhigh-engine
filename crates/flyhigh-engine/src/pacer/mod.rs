@@ -131,6 +131,8 @@ pub struct PacerOptions {
     #[option(values = "on, off", c = "fill_display (0, 1)")]
     pub fill_display: bool,
     /// Fraction of the refresh rate the planner may use; the rest absorbs hitches. Lower on a display that drops ticks.
+    /// A display that runs at a whole multiple of the source rate is used at that rate exactly (every tick one frame),
+    /// outside low latency.
     #[option(values = "0.9 to 1")]
     pub display_headroom: f64,
     /// Fraction of the source interval the GPU may spend per interval; the factor is capped so the measured costs fit.
@@ -170,7 +172,8 @@ pub struct PacerOptions {
     /// Drops exempt after a mode change (fullscreen, resize): the reflow stall is not a GPU limit (the extension's
     /// measured fullscreen reflow).
     pub settle_ms: f64,
-    /// Fewer in-betweens on fast scenes, where they are worth less and cost the same.
+    /// Fewer in-betweens on fast scenes, where they are worth less and cost the same. On a display that runs at a whole
+    /// multiple of the source rate the limit rounds up to a factor that lands evenly on its ticks.
     #[option(values = "on, off", c = "motion_adaptive (0, 1)")]
     pub motion_adaptive: bool,
     /// The host's present spacing limit: presentations closer than this are held to it. The Firefox adapter sets 7
@@ -325,6 +328,12 @@ impl PacerOptions {
 
 /// Exact modes let the delay grow to a whole lookahead interval.
 const EXACT_DELAY_MAX_MS: f64 = 2500.0;
+/// Every change of Auto's factor re-times the in-betweens, and the motion ceiling alone used to change it three to five
+/// times a second over game footage, each change a visible hitch (measured: 60 % of the off-pace ticks lay next to
+/// one). A change the factor in use does not force waits until Auto has asked for it `AUTO_ASK_MS` and the last change
+/// is `AUTO_HOLD_MS` old; only a factor that no longer fits gives way at once.
+const AUTO_ASK_MS: f64 = 250.0;
+const AUTO_HOLD_MS: f64 = 1000.0;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Counters {
@@ -442,6 +451,12 @@ pub struct Pacer {
     late_tail_t: f64,
     motion_avg: f64,
     factor: u32,
+    /// Since when Auto has asked for a higher (true) or a lower factor than the one in use.
+    auto_candidate: Option<(bool, f64)>,
+    auto_changed_at: f64,
+    /// Added to every due time so the dues fall halfway between display ticks (see `on_tick_grid`).
+    due_shift_ms: f64,
+    due_phase_avg: Option<f64>,
     last_tick: Option<f64>,
     last_present_wall: f64,
     last_pts: Option<f64>,
@@ -483,6 +498,10 @@ impl Pacer {
             late_tail_t: 0.0,
             motion_avg: 0.0,
             factor: 2,
+            auto_candidate: None,
+            auto_changed_at: f64::NEG_INFINITY,
+            due_shift_ms: 0.0,
+            due_phase_avg: None,
             last_tick: None,
             last_present_wall: f64::NEG_INFINITY,
             last_pts: None,
@@ -529,6 +548,9 @@ impl Pacer {
         self.late_avg = 0.0;
         self.late_tail_ms = 0.0;
         self.motion_avg = 0.0;
+        self.auto_candidate = None;
+        self.auto_changed_at = f64::NEG_INFINITY;
+        self.due_phase_avg = None;
         self.last_pts = None;
         self.prev = None;
         self.prev2 = None;
@@ -671,11 +693,45 @@ impl Pacer {
         self.pair_cost.or(self.opts.pair_cost_seed_ms)
     }
 
-    fn enqueue(&mut self, e: Entry) {
+    fn enqueue(&mut self, mut e: Entry) {
+        e.due = self.on_tick_grid(e.due);
         if self.queue.enqueue(e).is_some() {
             self.counters.evicted += 1;
             self.counters.drops += 1;
         }
+    }
+
+    /// A due time sitting on a display tick is shown on that tick or the next one depending on a fraction of a
+    /// millisecond of jitter, so a steady x2 alternated 4 and 12 ms gaps (measured: late flipping between 0.1 and 4.1
+    /// ms on a 240 Hz display). A constant shift keeps the dues halfway between ticks; it moves only when the dues
+    /// drift a quarter tick off the middle, which source and display clocks do slowly. Exact modes have their own grid.
+    fn on_tick_grid(&mut self, due: f64) -> f64 {
+        let display = self.display.measure();
+        let (Some(tick), true) =
+            (self.last_tick, self.display.ready() && display.measured && !self.opts.exact_cadence())
+        else {
+            return due;
+        };
+        let period = 1000.0 / display.display_hz;
+        // only an output rate that divides the display's puts its dues at one phase; any other spreads them over the
+        // whole tick, where the average says nothing and a recenter would only add a hitch
+        let even = self.source.source_hz().is_some_and(|hz| {
+            rate::display_multiple(self.factor.max(1) as f64 * hz, display.display_hz).is_some()
+                || (self.factor.max(1) as f64 * hz - display.display_hz).abs() <= display.display_hz * 0.01
+        });
+        if !even {
+            return due + self.due_shift_ms;
+        }
+        let x = (due + self.due_shift_ms - tick).rem_euclid(period);
+        let avg = self.due_phase_avg.map_or(x, |a| a * 0.9 + x * 0.1);
+        if (avg - period / 2.0).abs() > period / 4.0 {
+            let shift = (self.due_shift_ms + period / 2.0 - x).rem_euclid(period);
+            self.due_shift_ms = if shift > period / 2.0 { shift - period } else { shift };
+            self.due_phase_avg = Some(period / 2.0);
+        } else {
+            self.due_phase_avg = Some(avg);
+        }
+        due + self.due_shift_ms
     }
 
     fn enqueue_source(&mut self, id: u32, at: f64) {
@@ -725,6 +781,10 @@ impl Pacer {
             if d > 25f64.max(self.display.floor_ms() * 4.0) {
                 self.counters.stalls += 1;
                 self.control.stall(now);
+            } else if self.display.ready() && d > self.display.floor_ms() * 1.5 {
+                // a missed vsync: at the display's own rate the frame due on the lost tick has nowhere to go, and
+                // that is the compositor's, not the GPU's (the stall budget still charges a run of them)
+                self.control.stall(now);
             }
         }
         self.last_tick = Some(now);
@@ -750,6 +810,12 @@ impl Pacer {
             dropped = index as u32;
             if self.opts.limit_to_display {
                 self.counters.drops += index as u64;
+                if index == 1 && self.at_display_rate() {
+                    // one frame too many at the display's own rate is the source running a little fast or a clock
+                    // slip: the picture skips one tick either way, and it is no sign of the GPU (the stall budget still
+                    // charges a run of them)
+                    self.control.stall(now);
+                }
                 match self.control.charge_drops(now, index, &self.control_opts) {
                     DropCharge::Charged => {}
                     DropCharge::StallExempt => self.counters.drops_stall_exempt += index as u64,
@@ -866,7 +932,7 @@ impl Pacer {
                 // capped Auto: the Auto policy's presentation rate, no higher than the limit
                 let requested = match source_hz {
                     Some(hz) => {
-                        let policy = self.auto_policy(hz);
+                        let policy = self.auto_policy(hz, self.opts.motion_adaptive);
                         if policy.runnable {
                             limit.min(policy.presentation_hz)
                         } else {
@@ -945,9 +1011,57 @@ impl Pacer {
         plan
     }
 
-    fn auto_policy(&self, source_hz: f64) -> rate::AutoPolicy {
-        let display_capacity_hz =
-            display::measure_display_hz(self.display.policy_sample_ms(), self.opts.min_present_interval_ms).capacity_hz;
+    /// Whether every display tick shows a frame of its own: the factor times the source rate is the display's rate.
+    fn at_display_rate(&self) -> bool {
+        let display_hz = self.display.measure().display_hz;
+        self.source
+            .source_hz()
+            .is_some_and(|hz| (self.factor as f64 * hz - display_hz).abs() <= display_hz * rate::CADENCE_TOLERANCE)
+    }
+
+    /// The factor the mode settles at regardless of motion: what the delay floor is sized for.
+    fn steady_factor(&self) -> u32 {
+        match self.opts.mode {
+            RateMode::Auto if !self.opts.exact_cadence() => {
+                self.auto_policy(self.source.auto_source_hz(), false).factor
+            }
+            RateMode::Factor(f) => f,
+            _ => self.factor,
+        }
+    }
+
+    /// Auto's factor for this interval and whether it runs (see `AUTO_HOLD_MS`).
+    fn auto_settled_factor(&mut self, now: f64, source_hz: f64) -> (u32, bool) {
+        let policy = self.auto_policy(source_hz, self.opts.motion_adaptive);
+        let current = self.factor;
+        if self.auto_changed_at == f64::NEG_INFINITY {
+            // the start counts as a change: the queue fills and the estimates settle before the first rise
+            self.auto_changed_at = now;
+        }
+        if policy.factor == current {
+            self.auto_candidate = None;
+            return (current, policy.runnable);
+        }
+        let free = self.auto_policy(source_hz, false);
+        let up = policy.factor > current;
+        let since = match self.auto_candidate {
+            Some((dir, since)) if dir == up => since,
+            _ => {
+                self.auto_candidate = Some((up, now));
+                now
+            }
+        };
+        if current > free.factor || (now - since >= AUTO_ASK_MS && now - self.auto_changed_at >= AUTO_HOLD_MS) {
+            self.auto_candidate = None;
+            self.auto_changed_at = now;
+            return (policy.factor, policy.runnable);
+        }
+        // the factor in use fits wherever the motion-free factor does
+        (current, free.runnable)
+    }
+
+    fn auto_policy(&self, source_hz: f64, motion_adaptive: bool) -> rate::AutoPolicy {
+        let display = display::measure_display_hz(self.display.policy_sample_ms(), self.opts.min_present_interval_ms);
         auto_factor(&AutoInputs {
             max_factor: self.opts.max_factor,
             mid_cost_ms: self.mid_cost.value(),
@@ -955,12 +1069,15 @@ impl Pacer {
             source_hz,
             unique_interval_ms: self.source.unique_ms(),
             wall_interval_ms: self.source.wall_ms(),
-            display_capacity_hz,
+            display_capacity_hz: display.capacity_hz,
+            display_hz: display.display_hz,
+            even_cadence: self.display.ready() && !self.opts.low_latency,
+            cadence_hz: self.source.source_hz().unwrap_or(source_hz),
             limit_to_display: self.opts.limit_to_display,
             queue_capacity_hz: self.queue.capacity_hz(self.delay_ms),
             headroom: self.opts.display_headroom,
             motion_avg: self.motion_avg,
-            motion_adaptive: self.opts.motion_adaptive,
+            motion_adaptive,
             penalty: self.control.penalty(),
         })
     }
@@ -972,7 +1089,6 @@ impl Pacer {
         self.prev2 = None;
         self.grid_next_at = 0.0;
         self.grid_phase_ms = 0.0;
-        self.source.reset_clock();
     }
 
     /// A source frame arrived, its interval kind known. Returns the requests that must be generated before the pair
@@ -988,6 +1104,7 @@ impl Pacer {
         });
         self.counters.sources += 1;
         let dt = self.source.wall_sample(now);
+        let pts_step = self.last_pts.map(|p| (frame.pts_ms - p) / self.source.playback_rate());
         let decoded = match self.last_pts {
             Some(p) => (frame.pts_ms - p) / (frame.skipped + 1) as f64,
             None => dt,
@@ -995,8 +1112,12 @@ impl Pacer {
         self.last_pts = Some(frame.pts_ms);
         if frame.skipped > 0 {
             // a coalesced callback: never interpolate across the missing frame as though this one followed at the
-            // normal cadence
+            // normal cadence. The clock carries on where the timestamp step spans the missing frame: restarting it
+            // on the late arrival shifted every later picture (a browser decoder under load skips a frame a second)
             self.history_break();
+            if !pts_step.is_some_and(|d| d > 0.5 && d < 500.0) {
+                self.source.reset_clock();
+            }
         }
         if self.source.push_decoded(decoded) {
             self.counters.rate_transitions += 1;
@@ -1006,7 +1127,8 @@ impl Pacer {
             self.prev2 = None;
             self.source.reset_clock();
         }
-        self.source.advance_clock(now);
+        let tick_ms = if self.display.ready() { self.display.floor_ms() } else { 0.0 };
+        self.source.advance_clock(now, pts_step, tick_ms);
 
         // the presentation delay must cover the batch compute time (own plus the previous batch draining), or high
         // factors drop their early mids as stale; it follows its target at 2 ms per frame (a whole interval in
@@ -1016,7 +1138,9 @@ impl Pacer {
         let burst_pad = ((self.late_avg - 4.0) * 2.0).max((self.late_tail_ms - 8.0) * 2.0).clamp(0.0, 60.0);
         let lookahead = if self.opts.lookahead { wall_pair.min(120.0) } else { 0.0 };
         let measured_mid = self.mid_cost.value();
-        let fast = measured_mid > 0.0 && measured_mid < 6.0 && self.late_avg < 3.0 && self.factor <= 3;
+        // decided on what holds still (the cost, the factor Auto could run at), never on the factor of the moment or
+        // the lateness: either moved the floor by 18 ms several times a second, and the picture's timeline with it
+        let fast = measured_mid > 0.0 && measured_mid < 6.0 && self.steady_factor() <= 3;
         let floor = if fast { self.opts.delay_floor_ms * 0.7 } else { self.opts.delay_floor_ms } + lookahead;
         let max = if exact { EXACT_DELAY_MAX_MS } else { self.opts.delay_max_ms } + lookahead;
         let target = if self.opts.low_latency && !exact {
@@ -1042,15 +1166,25 @@ impl Pacer {
                 max,
             )
         };
-        let rise = if exact { wall_pair.max(2.0) } else { 2.0 };
-        // low latency sits close to its target, which follows the arrival jitter: falling as fast as it rises would
-        // squeeze the presentation timeline every few frames, and at a factor that fills the display that drops frames
-        let fall = if self.opts.low_latency && !exact { 0.25 } else { 2.0 };
+        // every millisecond the delay moves stretches or squeezes the picture's timeline by as much: 2 ms per frame is
+        // 12 % faster or slower for a few frames, a visible hitch each time the target moves (a factor change moved it
+        // between 42 and 60 ms). Video drifts at 0.25 ms per frame (1.5 %) and rises fast only while frames run late;
+        // low latency sits close to its target, which follows the arrival jitter, and only falls slowly
+        let (rise, fall) = if exact {
+            (wall_pair.max(2.0), 2.0)
+        } else if self.opts.low_latency {
+            (2.0, 0.25)
+        } else {
+            (if burst_pad > 0.0 { 2.0 } else { 0.25 }, 0.25)
+        };
         self.delay_ms += (target - self.delay_ms).clamp(-fall, rise);
 
         let sched_t = self.source.sched_t();
         let src_at = sched_t + self.delay_ms;
-        let interval = if exact { wall_pair } else { self.source.wall_ms() };
+        // in-betweens are spread over the step the clock took, the spacing of the source frames around them: the
+        // arrival average differs from it by up to a millisecond, and at x4 on 240 Hz that piled the frames up against
+        // the ticks until one was dropped every second or two
+        let interval = if exact { wall_pair } else { self.source.sched_step_ms().unwrap_or(self.source.wall_ms()) };
         let start_at = sched_t - interval + self.delay_ms;
         let plan = if exact { Some(self.rate_plan(now)) } else { None };
         let cadence_mode = plan.as_ref().is_some_and(|p| p.interpolation_allowed);
@@ -1126,9 +1260,8 @@ impl Pacer {
         let source_hz = self.source.auto_source_hz();
         let (n, run, probe) = match self.opts.mode {
             RateMode::Auto => {
-                let policy = self.auto_policy(source_hz);
-                let mut n = policy.factor;
-                let mut run = policy.runnable || (n > 1 && self.control.gpu_keeping_up(&self.control_opts));
+                let (mut n, runnable) = self.auto_settled_factor(now, source_hz);
+                let mut run = runnable || (n > 1 && self.control.gpu_keeping_up(&self.control_opts));
                 let mut probe = false;
                 if run {
                     self.control.probe_reset(now, &self.control_opts);

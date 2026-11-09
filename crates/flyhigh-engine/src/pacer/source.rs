@@ -178,6 +178,10 @@ pub struct SourceEstimator {
     last_unique_at: Option<f64>,
     last_arrival: Option<f64>,
     sched_t: Option<f64>,
+    /// How far the schedule clock moved on the last frame: the interval its in-betweens are spread over.
+    sched_step_ms: Option<f64>,
+    /// The last two seconds of (arrival, timestamp step): how fast frames really come against their timestamps.
+    steps: std::collections::VecDeque<(f64, f64)>,
     playback_rate: f64,
 }
 
@@ -199,6 +203,8 @@ impl SourceEstimator {
             last_unique_at: None,
             last_arrival: None,
             sched_t: None,
+            sched_step_ms: None,
+            steps: std::collections::VecDeque::new(),
             playback_rate: 1.0,
         }
     }
@@ -270,23 +276,64 @@ impl SourceEstimator {
         self.arrival_late_ms
     }
 
-    /// The PLL-smoothed schedule clock: decode jitter must not shake presentation. It follows the arrival rhythm
-    /// softly (8 %) and resyncs hard on seeks and stalls (more than 80 ms off).
-    pub fn advance_clock(&mut self, now: f64) -> f64 {
+    /// The PLL-smoothed schedule clock: decode jitter must not shake presentation. While frames arrive within one and
+    /// a half display ticks (`tick_ms`) of it, it steps by each frame's own timestamp step (`step_ms`, wall time),
+    /// scaled by how fast frames have really come against their timestamps over the last two seconds, and follows the
+    /// arrivals only slowly. A source without timestamps or with a delivery that wanders further steps by the
+    /// arrival EMA and follows the arrivals at 8 %. Both resync hard on seeks and stalls (more than 80 ms off).
+    /// Stepping by the arrival EMA alone left the clock about 1 % slow on a 60 fps video whose callbacks land on a
+    /// 240 Hz display's ticks, so the due times slid across the ticks.
+    pub fn advance_clock(&mut self, now: f64, step_ms: Option<f64>, tick_ms: f64) -> f64 {
+        let step = step_ms.filter(|d| *d > 0.5 && *d < 500.0);
+        match step {
+            Some(d) => {
+                self.steps.push_back((now, d));
+                while self.steps.front().is_some_and(|(t, _)| now - t > 2000.0) {
+                    self.steps.pop_front();
+                }
+            }
+            None => self.steps.clear(),
+        }
+        let pace = match (self.steps.front(), self.steps.len()) {
+            (Some(&(first, _)), n) if n >= 8 && now - first >= 500.0 => {
+                let stamped: f64 = self.steps.iter().skip(1).map(|(_, d)| d).sum();
+                ((now - first) / stamped).clamp(0.5, 2.0)
+            }
+            _ => 1.0,
+        };
         let t = match self.sched_t {
             Some(s) => {
-                let expected = s + self.wall_ms;
-                if (now - expected).abs() > 80.0 {
-                    now
-                } else {
-                    expected + 0.08 * (now - expected)
+                let stamped = step.map(|d| s + d * pace);
+                match stamped {
+                    Some(expected) if (now - expected).abs() <= 80.0 && now - expected <= 1.5 * tick_ms => {
+                        // timestamps space the frames exactly, so the arrivals only correct a slow drift: following
+                        // them harder passed their bursts (frames a tick late, or a few delivered at once) on to the
+                        // spacing of the in-betweens
+                        let gain = if now - expected < -1.5 * tick_ms { 0.05 } else { 0.02 };
+                        expected + gain * (now - expected)
+                    }
+                    _ => {
+                        // no timestamps, or a delivery that wanders further than a tick: follow the arrival rhythm
+                        let expected = s + self.wall_ms;
+                        if (now - expected).abs() > 80.0 {
+                            self.steps.clear();
+                            now
+                        } else {
+                            expected + 0.08 * (now - expected)
+                        }
+                    }
                 }
             }
             None => now,
         };
+        self.sched_step_ms = self.sched_t.map(|s| t - s).filter(|d| *d > 0.5 && *d < 3.0 * self.wall_ms);
         self.sched_t = Some(t);
         self.arrival_late_ms = (self.arrival_late_ms * 0.99).max((now - t).clamp(0.0, 80.0));
         t
+    }
+
+    pub fn sched_step_ms(&self) -> Option<f64> {
+        self.sched_step_ms
     }
 
     pub fn sched_t(&self) -> f64 {
@@ -295,6 +342,8 @@ impl SourceEstimator {
 
     pub fn reset_clock(&mut self) {
         self.sched_t = None;
+        self.sched_step_ms = None;
+        self.steps.clear();
         self.last_unique_at = None;
     }
 

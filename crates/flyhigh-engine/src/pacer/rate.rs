@@ -200,7 +200,17 @@ pub fn resolve_output_rate(i: &RateInputs) -> OutputPlan {
     let adjusted =
         if !i.strict_ceiling && i.mode == RateMode::DisplayHz && i.limit_to_display { display_limit } else { desired };
     let maximum = display_limit.min(compute_capacity).min(runtime_capacity);
-    let output = adjusted.min(maximum);
+    let mut output = adjusted.min(maximum);
+    // the display's own rate as a whole multiple of the source needs no headroom: every tick shows exactly one frame,
+    // due on it, where 97 % of it put three in-betweens in some intervals and four in others (see `auto_factor`)
+    if i.mode == RateMode::DisplayHz && i.limit_to_display && !i.strict_ceiling && !fill_panel {
+        if let Some(n) = display_multiple(source_hz, d.display_hz) {
+            let even = n as f64 * source_hz;
+            if even <= d.capacity_hz * (1.0 + CADENCE_TOLERANCE) && even <= compute_capacity.min(runtime_capacity) {
+                output = even;
+            }
+        }
+    }
     let clamp = if adjusted > maximum + tolerance {
         Some(if maximum == display_limit {
             ClampReason::Display
@@ -265,6 +275,13 @@ pub struct AutoInputs {
     pub unique_interval_ms: f64,
     pub wall_interval_ms: f64,
     pub display_capacity_hz: f64,
+    /// The display's nominal refresh: the tick grid the frames land on, which a host present limit does not change.
+    pub display_hz: f64,
+    /// Whether to keep to the display's cadence (see `auto_factor`).
+    pub even_cadence: bool,
+    /// The decoded cadence the cadence rule matches against the display. `source_hz` is the fastest recent interval,
+    /// a GPU budget's pessimism: millisecond timestamps (41 and 42 ms at 23.976 fps) read 24.39 there.
+    pub cadence_hz: f64,
     pub limit_to_display: bool,
     pub queue_capacity_hz: f64,
     pub headroom: f64,
@@ -282,6 +299,21 @@ pub struct AutoPolicy {
     pub runnable: bool,
 }
 
+/// How near a whole multiple of the source rate the display rate must be for Auto to keep to the display's cadence
+/// (23.976 fps on 240 Hz is 0.1 % off 10x).
+pub const CADENCE_TOLERANCE: f64 = 0.01;
+
+/// n when the display runs at n times the source rate (n >= 2, within `CADENCE_TOLERANCE`), else None (60 fps on
+/// 144 Hz: no factor lands evenly).
+pub fn display_multiple(source_hz: f64, display_hz: f64) -> Option<u32> {
+    if !(source_hz > 0.0 && display_hz > 0.0) {
+        return None;
+    }
+    let r = display_hz / source_hz;
+    let n = r.round();
+    (n >= 2.0 && (r - n).abs() / r <= CADENCE_TOLERANCE).then_some(n as u32)
+}
+
 /// Auto: as much as fits the unique-frame budget, the display service, the drop feedback and the current motion.
 pub fn auto_factor(i: &AutoInputs) -> AutoPolicy {
     let mid = if i.mid_cost_ms > 0.0 { i.mid_cost_ms } else { 10.0 };
@@ -295,6 +327,7 @@ pub fn auto_factor(i: &AutoInputs) -> AutoPolicy {
     {
         factor -= 1;
     }
+    let gpu_factor = factor;
     let unique_hz = if unique > 1.0 { i.source_hz.min(1000.0 / unique) } else { i.source_hz };
     if i.limit_to_display {
         let display_hz = auto_display_budget_hz(i.source_hz, i.display_capacity_hz, i.headroom);
@@ -320,6 +353,27 @@ pub fn auto_factor(i: &AutoInputs) -> AutoPolicy {
         6
     };
     factor = factor.min(motion_ceiling);
+    // An output rate that does not divide the display's lands on the ticks unevenly: x3 of a 60 fps video on a 240 Hz
+    // display shows pictures 4.2, 4.2 and 8.3 ms apart, every third one held twice as long, which reads as judder
+    // however high the rate (measured on game footage: picture pace error 1.36 ms p50 at x2/x3, 0.04 ms at x4; 24 fps
+    // anime at x3/x4 on 240 Hz: 30 % of the pictures off pace). When the display runs at a whole multiple n of the
+    // source rate, the motion ceiling rounds up to the next factor that divides n (anime's x3 and x4 become x5, a
+    // flick's x3 at 60 fps becomes x4) and Auto takes the largest dividing factor the GPU allows; the display's own
+    // rate (factor n) needs no headroom, since every tick then shows exactly one frame, due on it. Only a GPU that
+    // cannot reach the next even rate keeps an uneven one below half the display's rate: 96 fps on 240 Hz varies far
+    // less than it would lose by falling to 48. The drop penalty still steps down from there.
+    if i.even_cadence && i.limit_to_display {
+        if let Some(n) = display_multiple(i.cadence_hz, i.display_hz) {
+            let motion_even = (motion_ceiling..=6).find(|f| n % f == 0).unwrap_or(motion_ceiling);
+            let ceiling = gpu_factor.min(motion_even).min(6);
+            let fits = |f: u32| f as f64 * i.cadence_hz <= i.display_capacity_hz * (1.0 + CADENCE_TOLERANCE);
+            if let Some(even) = (1..=ceiling).rev().find(|&f| n % f == 0 && fits(f)) {
+                if even >= factor || factor as f64 * i.cadence_hz > i.display_hz * 0.5 {
+                    factor = even;
+                }
+            }
+        }
+    }
     factor = factor.saturating_sub(i.penalty).max(1);
     let runnable = factor > 1
         && unique_interval_cost(factor, mid, 0.0, i.source_hz, pair, unique) <= unique * 1.1

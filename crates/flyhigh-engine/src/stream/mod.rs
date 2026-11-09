@@ -494,6 +494,9 @@ impl Stream {
         self.gen.reset_history();
         self.pushed.clear();
         self.interval = None;
+        if let Some(c) = &self.classifier {
+            c.forget_history();
+        }
         if let Some(w) = &mut self.warp {
             w.break_pair();
         }

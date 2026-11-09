@@ -25,6 +25,11 @@ fn classification_thresholds_are_pure() {
     assert_eq!(noise.kind, IntervalKind::Hold, "codec noise on a held frame stays a hold");
     let off = Thresholds { cut_mean: None, hold_mean: None, hold_max: 0.0 };
     assert_eq!(Classification::from_stats(cells * 765, 765, cells, &off).kind, IntervalKind::Motion);
+    // a cut is a lone spike after a calm pair; after a moving pair it is the middle of a fast camera move
+    assert_eq!(cut.after(Some(0.02), &th).kind, IntervalKind::Cut);
+    assert_eq!(cut.after(None, &th).kind, IntervalKind::Cut);
+    assert_eq!(cut.after(Some(0.07), &th).kind, IntervalKind::Motion);
+    assert_eq!(motion.after(Some(0.2), &th).kind, IntervalKind::Motion);
 }
 
 fn engine() -> Option<Engine> {

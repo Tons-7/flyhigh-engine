@@ -223,13 +223,27 @@ fn steady_chrome_fills_a_120hz_display_from_24fps_without_drops() {
     let trace = synth(12_000.0, 24.0, 2.0, 3.0, |_| 1000.0 / 120.0);
     let r = run(&trace, &PacerOptions::default());
     let steady = r.steady(3);
-    assert!(steady.iter().all(|s| s.factor == 4), "24 x 5 exceeds the 97 % headroom of 120 Hz, so x4: {steady:?}");
+    assert!(steady.iter().all(|s| s.factor == 5), "x5 is the display's own 120 Hz, one frame per tick: {steady:?}");
     assert!(steady.iter().all(|s| s.drops == 0), "{steady:?}");
     let presents = presents_per_second(&r, 3);
-    assert!(presents.iter().all(|p| (92..=98).contains(p)), "96 presentations per second: {presents:?}");
+    assert!(presents.iter().all(|p| (118..=122).contains(p)), "120 presentations per second: {presents:?}");
     assert_eq!(r.penalty_max, 0);
     assert_eq!(r.report.counters.late_fallbacks, 0, "every requested mid was there in time");
     assert!(r.report.history_frames >= 4);
+}
+
+#[test]
+fn auto_keeps_to_the_display_cadence_above_half_its_rate() {
+    // 60 fps on 240 Hz: x3 (180 per second) would show pictures 4.2, 4.2 and 8.3 ms apart; x4 is one per tick
+    let trace = synth(12_000.0, 60.0, 0.3, 1.5, |_| 1000.0 / 240.0);
+    let r = run(&trace, &PacerOptions::default());
+    let steady = r.steady(3);
+    assert!(steady.iter().all(|s| s.factor == 4 && s.drops == 0), "{steady:?}");
+    assert!(presents_per_second(&r, 3).iter().all(|p| (238..=242).contains(p)));
+    // 24 fps on 144 Hz with the factor capped at 4: 4 does not divide 6 (ticks 1, 2, 1, 2), 3 does
+    let trace = synth(12_000.0, 24.0, 0.3, 1.5, |_| 1000.0 / 144.0);
+    let r = run(&trace, &PacerOptions { motion_adaptive: false, max_factor: 4, ..PacerOptions::default() });
+    assert!(r.steady(3).iter().all(|s| s.factor == 3), "{:?}", r.steady(3));
 }
 
 #[test]
@@ -250,12 +264,12 @@ fn a_saturated_loop_steps_auto_down_and_a_clean_stretch_recovers_it() {
     // ticks slow to 30 ms (3.6 x the floor) for three seconds: frames pile up, several due per tick
     let trace = synth(28_000.0, 24.0, 2.0, 3.0, |t| if (3000.0..6000.0).contains(&t) { 30.0 } else { 1000.0 / 120.0 });
     let r = run(&trace, &PacerOptions::default());
-    assert!(r.seconds[2].penalty == 0 && r.seconds[2].factor == 4, "{:?}", r.seconds[2]);
+    assert!(r.seconds[2].penalty == 0 && r.seconds[2].factor == 5, "{:?}", r.seconds[2]);
     assert!(r.seconds[3].penalty >= 1, "the first step lands within the first overloaded second: {:?}", r.seconds[3]);
     assert!(r.penalty_max >= 2, "sustained overload keeps stepping: {}", r.penalty_max);
-    assert!(r.seconds[5].factor < 4, "{:?}", r.seconds[5]);
+    assert!(r.seconds[5].factor < 5, "{:?}", r.seconds[5]);
     assert_eq!(r.report.penalty, 0, "6 s clean per step: recovered by 28 s ({:?})", r.seconds.last());
-    assert_eq!(r.seconds.last().map(|s| s.factor), Some(4));
+    assert_eq!(r.seconds.last().map(|s| s.factor), Some(5));
 }
 
 #[test]
@@ -328,11 +342,13 @@ fn recorded_chrome_session_replays_without_drops_or_penalties() {
     let opts = trace.options.clone().expect("the host recorded its options");
     let r = replay(&trace, &opts).unwrap();
     assert_eq!((r.report.counters.drops, r.penalty_max, r.report.counters.late_fallbacks), (0, 0, 0));
-    assert_eq!(r.factor_max, 6, "Auto reaches the ceiling on calm scenes");
     let total: u64 = r.seconds.iter().map(|s| s.presents).sum();
-    assert!((2900..=3150).contains(&total), "about 100 presents per second over 30 s: {total}");
-    let tail = r.steady(22);
-    assert!(tail.iter().all(|s| s.presents >= 115), "the calm tail runs at x6: {tail:?}");
+    assert!((3200..=3450).contains(&total), "about 110 presents per second over 30 s: {total}");
+    let tail = &r.seconds[23..29];
+    assert!(
+        tail.iter().all(|s| s.factor == 5 && s.presents >= 110),
+        "x5 is 120 Hz, every second tick, where x6 would hold every third picture twice as long: {tail:?}"
+    );
 }
 
 #[test]
@@ -348,7 +364,7 @@ fn recorded_firefox_session_keeps_auto_through_its_stalls() {
     let c = &r.report.counters;
     assert!(c.drops <= 6 && c.drops == c.drops_stall_exempt, "every drop follows a stall: {c:?}");
     let total: u64 = r.seconds.iter().map(|s| s.presents).sum();
-    assert!((2600..=2900).contains(&total), "about 90 presents per second over 30 s: {total}");
+    assert!((3000..=3250).contains(&total), "about 105 presents per second over 30 s: {total}");
 }
 
 #[test]
@@ -379,7 +395,7 @@ fn recorded_player_session_replays_to_the_report_the_host_wrote() {
     let written = std::fs::read_to_string(path).expect("the report the player wrote");
     assert_eq!(r.report.to_json(), written);
     assert!(r.report.pair_cost_ms > 0.0 && r.report.mid_cost_ms > 0.0, "costs came from timestamp queries");
-    assert_eq!((r.report.penalty, r.factor_max), (0, 6));
+    assert_eq!((r.report.penalty, r.factor_max), (0, 5), "x5 lands on every second tick of 240 Hz, x6 would not");
 }
 
 // A game streamed at 60 fps to a 240 Hz display: arrivals with 1 ms of jitter and an occasional 3 to 5 ms late frame,

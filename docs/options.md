@@ -67,7 +67,7 @@ Every heuristic of the Pacer (ARCHITECTURE.md) with its default: what to present
 | `lookahead` | off | on, off | The generated interval is one source frame back: the Stream's video mode with its lookahead, where the real slot may still be re-timed. | `lookahead (0, 1)` |
 | `limit_to_display` | on | on, off | The measured refresh rate is a ceiling on the output rate. Off lets the GPU generate above it; the extra frames are superseded, not dropped. | `limit_to_display (0, 1)` |
 | `fill_display` | off | on, off | Display Hz mode fills the whole panel rate instead of leaving the headroom. | `fill_display (0, 1)` |
-| `display_headroom` | 0.97 | 0.9 to 1 | Fraction of the refresh rate the planner may use; the rest absorbs hitches. Lower on a display that drops ticks. | `display_headroom` |
+| `display_headroom` | 0.97 | 0.9 to 1 | Fraction of the refresh rate the planner may use; the rest absorbs hitches. Lower on a display that drops ticks. A display that runs at a whole multiple of the source rate is used at that rate exactly (every tick one frame), outside low latency. | `display_headroom` |
 | `compute_budget` | 0.9 | 0 to 1 | Fraction of the source interval the GPU may spend per interval; the factor is capped so the measured costs fit. | `compute_budget` |
 | `delay_floor_ms` | 60 |  | The least presentation delay: how far ahead of their arrival source frames are shown, so that their in-betweens have time to be generated. | `delay_floor_ms` |
 | `low_latency` | off | on, off | For games and anything driven by a hand on a mouse: the presentation delay is the least that still lets the in-betweens be generated, (1 - 1/N) of a source interval at factor N plus the measured pair and frame cost, and the arrival jitter, instead of the video window (`delay_floor_ms`) with its 25 ms reserve. At 60 fps that is 10 to 15 ms instead of 60. Auto and a fixed factor; the exact modes keep their own delay. | `low_latency (0, 1)` |
@@ -83,7 +83,7 @@ Every heuristic of the Pacer (ARCHITECTURE.md) with its default: what to present
 | `stall_window_ms` | 20 |  | Drops within this window after a host stall are not charged to the GPU. | `stall_window_ms` |
 | `stall_rate_limit` | 4 |  | Stalls per 2 s above which they stop being exempt: that often, the GPU is the problem after all. | `stall_rate_limit` |
 | `settle_ms` | 1200 |  | Drops exempt after a mode change (fullscreen, resize): the reflow stall is not a GPU limit (the extension's measured fullscreen reflow). | `settle_ms` |
-| `motion_adaptive` | on | on, off | Fewer in-betweens on fast scenes, where they are worth less and cost the same. | `motion_adaptive (0, 1)` |
+| `motion_adaptive` | on | on, off | Fewer in-betweens on fast scenes, where they are worth less and cost the same. On a display that runs at a whole multiple of the source rate the limit rounds up to a factor that lands evenly on its ticks. | `motion_adaptive (0, 1)` |
 | `min_present_interval_ms` | 0 |  | The host's present spacing limit: presentations closer than this are held to it. The Firefox adapter sets 7 (its compositor stalls 40 to 90 ms below that); 0 = none. | `min_present_interval_ms` |
 | `playback_rate` | 1 |  | Media seconds per wall second (a player's speed). | `playback_rate` |
 | `mid_cost_seed_ms` | 10 |  | The GPU cost assumed per generated frame until the first measurement (10 ms at 848 x 480; scale with the output resolution). | `mid_cost_seed_ms` |

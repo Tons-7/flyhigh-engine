@@ -16,6 +16,11 @@ pub const GRID: (u32, u32) = (48, 27);
 const IN_FLIGHT: usize = 3;
 /// The kernel's unit: the rgb absolute difference of one cell, 0..765 in 1/255 steps.
 const CELL_MAX: f32 = 765.0;
+/// A pair over the cut threshold is a cut only when the moving pair before it differed by less than this share of
+/// the threshold. A camera flick in a game is a run of large differences (on a 60 fps capture the pair before a
+/// "cut" differed by 54 to 98 against a threshold of 90), a cut a lone spike after a calm pair (1 to 35 on anime);
+/// taking a flick for a cut left it without in-betweens, a 16.7 ms step in the middle of 4 ms ones.
+const CUT_AFTER_CALM: f32 = 0.5;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -63,6 +68,17 @@ impl Classification {
         };
         Classification { kind, mean, max, black: max == 0.0, motion: mean as f64 * CELL_MAX as f64 }
     }
+
+    /// The same pair once the mean difference of the moving pair before it is known (`before`; None at the start):
+    /// a cut after a moving pair is the middle of a fast camera move (see `CUT_AFTER_CALM`).
+    pub fn after(mut self, before: Option<f32>, th: &Thresholds) -> Classification {
+        if let (IntervalKind::Cut, Some(cut), Some(before)) = (self.kind, th.cut_mean, before) {
+            if before >= cut * CUT_AFTER_CALM {
+                self.kind = IntervalKind::Motion;
+            }
+        }
+        self
+    }
 }
 
 pub struct Classifier {
@@ -72,6 +88,8 @@ pub struct Classifier {
     stages: Vec<(wgpu::Buffer, Rc<Cell<bool>>)>,
     bind_groups: HashMap<(usize, usize), wgpu::BindGroup>,
     thresholds: Thresholds,
+    /// The mean difference of the last pair that was not a hold, as its readback landed.
+    last_moving: Rc<Cell<Option<f32>>>,
 }
 
 impl Classifier {
@@ -105,7 +123,15 @@ impl Classifier {
                 (b, Rc::new(Cell::new(false)))
             })
             .collect();
-        Classifier { sampler, stats, params, stages, bind_groups: HashMap::new(), thresholds }
+        Classifier {
+            sampler,
+            stats,
+            params,
+            stages,
+            bind_groups: HashMap::new(),
+            thresholds,
+            last_moving: Rc::new(Cell::new(None)),
+        }
     }
 
     pub fn thresholds(&self) -> &Thresholds {
@@ -150,11 +176,16 @@ impl Classifier {
         gpu.queue.submit(Some(enc.finish()));
         let th = self.thresholds;
         let cells = GRID.0 * GRID.1;
+        let last_moving = self.last_moving.clone();
         Some(Readback::new(
             stage,
             Box::new(move |d: &[u8]| {
                 let s: &[u32] = bytemuck::cast_slice(&d[..8]);
-                Classification::from_stats(s[0], s[1], cells, &th)
+                let c = Classification::from_stats(s[0], s[1], cells, &th).after(last_moving.get(), &th);
+                if c.kind != IntervalKind::Hold {
+                    last_moving.set(Some(c.mean));
+                }
+                c
             }),
             Some(Box::new(move || busy.set(false))),
         ))
@@ -163,5 +194,10 @@ impl Classifier {
     /// The input textures were recreated: the cached bind groups refer to the old ones.
     pub fn forget_textures(&mut self) {
         self.bind_groups.clear();
+    }
+
+    /// A seek or a new source: the pair before the next one is no longer the one this saw.
+    pub fn forget_history(&self) {
+        self.last_moving.set(None);
     }
 }

@@ -5,6 +5,45 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-09
+
+### Fixed
+
+- Even pacing. On game footage (60 fps on a 240 Hz display, Chrome, Auto) a quarter of the pictures (37 a second)
+  reached the screen a display tick early or late; now 0 to 2 % do, the rest being frames the browser's decoder
+  skipped (pace error p95 2.85 to 0.13 ms). 24 fps anime on the same display: 38.6 % to 1.4 %. A fixed x2 went from
+  13 % to none, Display Hz mode from 9.1 % to 2.3 % (repeats of one picture counted as one showing).
+  The causes, each measured:
+  - Auto ran rates that land on the display's ticks unevenly, x3 of 60 fps on 240 Hz showing pictures 4.2, 4.2 and
+    8.3 ms apart. When the display runs at a whole multiple of the source rate, the motion ceiling now rounds up to
+    the next factor that divides it (anime's x3 and x4 on 240 Hz become x5, a flick's x3 at 60 fps becomes x4) and
+    Auto takes the largest dividing factor the GPU allows; the display's own rate (x4 there, x5 for 24 fps on
+    120 Hz) needs no headroom, since every tick then shows one frame. Display Hz mode does the same. Low latency
+    keeps its headroom: its frames follow the arrival jitter.
+  - The motion ceiling changed the factor three to five times a second, each change a hitch. A change the factor in
+    use does not force now waits until Auto has asked for it 250 ms and the last change is a second old.
+  - The presentation delay followed a floor that depended on the factor of the moment and the lateness, moving by
+    18 ms several times a second at 2 ms per frame (12 % faster or slower for a few frames). The floor now depends on
+    the cost and the factor Auto could run at, and the delay drifts at 0.25 ms per frame unless frames run late.
+  - The schedule clock stepped by the arrival average and ran about 1 % slow when the frame callbacks land on the
+    display's ticks, and restarted on every frame the decoder skipped. It now steps by the frames' timestamps, scaled
+    by how fast they really come, follows the arrivals only slowly, and carries on over a skipped frame; a delivery
+    that wanders further than a tick is followed as before. The in-betweens are spread over the clock's own step.
+  - Due times sitting on a tick were shown on it or the next one by a fraction of a millisecond, so a steady x2
+    alternated 4 and 12 ms gaps. A constant shift keeps them halfway between ticks when the output rate divides the
+    display's.
+- Fast camera moves are no longer taken for scene cuts. The classifier compares two frames, and a flick in a game
+  differs from one frame to the next as much as a cut does, so a flick got no in-betweens: a 16.7 ms step among 4 ms
+  ones, at the moment the motion is fastest. A cut now also needs a calm pair before it (a moving pair under half the
+  threshold): on 22 s of 60 fps game footage 23 "cuts" became 3 and the output rate went from 143 to about 175 fps,
+  while the anime fixture keeps its real cuts (its fast action, a run of large differences, is interpolated now).
+- Auto matched the display against the fastest recent source interval, which millisecond timestamps (41 and 42 ms at
+  23.976 fps) read as 24.39 fps: no whole multiple of 240 Hz, so anime fell back to x3 for moments. The cadence rule
+  uses the decoded rate.
+- At the display's own rate a missed vsync, or a source running a little fast, drops one frame with nowhere to go.
+  Such a drop is now the compositor's (within the stall budget), not a step down for Auto: it had held Auto at x1
+  for six seconds.
+
 ## [0.3.2] - 2026-11-09
 
 ### Added
