@@ -123,8 +123,9 @@ look like.
   the one that started two frames back. Cadence re-timing needs it; the statistics of the newest pair come back
   asynchronously (`stats_pending`). Three rotating pair contexts.
 - **Classification.** The two frames are sampled on a 48 x 27 grid (`classify.wgsl`); a mean per-channel difference
-  above `scene_cut.threshold` is a cut, a mean below `held_frames.mean` with every cell below `held_frames.max` is a
-  hold, anything else motion. The readback is asynchronous (three may be in flight; beyond that the pair counts as
+  above `scene_cut.threshold` is a cut when the moving pair before it differed by less than half the threshold (a
+  fast camera move is a run of large differences, a cut a lone spike after a calm pair), a mean below
+  `held_frames.mean` with every cell below `held_frames.max` is a hold, anything else motion. The readback is asynchronous (three may be in flight; beyond that the pair counts as
   motion) and lands before the interval's first mid is due. The mean cell difference in 0..765 units is the motion
   statistic the Pacer's motion-adaptive ceiling uses.
 - **Order with the Pacer.** Classify the new frame against the previous one, then `pacer.source_frame` with the kind,
@@ -168,11 +169,19 @@ Inside, in the order a tick runs:
    max(25 ms, 4 x floor) is a host stall.
 2. **Source estimator** (`source.rs`). From source pts: the interval (trimmed mean over 32 samples, snapped to common
    video rates within 1.5 %, held through 3 % noise once nominal, a transition after 4 agreeing samples outside 12 %),
-   the arrival-interval EMA, the unique-frame interval (holds and cuts excluded) and the PLL schedule clock (follows
-   arrivals at 8 %, resyncs hard beyond 80 ms) that places presentations.
+   the arrival-interval EMA, the unique-frame interval (holds and cuts excluded) and the PLL schedule clock that places
+   presentations. While frames arrive within 1.5 display ticks of it, the clock steps by each frame's pts step scaled
+   by how fast frames really came against their pts over the last 2 s, and follows the arrivals at 2 %; without pts
+   or with a delivery that wanders further it steps by the arrival EMA and follows at 8 %; it resyncs hard beyond
+   80 ms and carries on over a frame the decoder skipped.
 3. **Output rate policy** (`rate.rs`). Modes: `Factor(n)`, `Auto` (as many as the display and GPU allow, capped by
-   motion), `DisplayHz`, `Target(fps)`; Auto with `fps_limit` is a strict-ceiling target. The 2x floor, the display
-   headroom (0.97), compute capacity from the pair / mid / present costs within `compute_budget` of the source
+   motion), `DisplayHz`, `Target(fps)`; Auto with `fps_limit` is a strict-ceiling target. Even cadence: when the
+   display runs at a whole multiple n of the decoded source rate (within 1 %), Auto rounds the motion ceiling up to
+   the next factor dividing n and takes the largest dividing factor the GPU allows (never x1 for it; a GPU that
+   cannot reach an even rate keeps an uneven one below half the display's rate), and `DisplayHz` outputs n x source
+   exactly; the display's own rate needs no headroom, every tick showing one frame (not with `low_latency`). A
+   factor change the factor in use does not force waits until Auto has asked for it 250 ms and the last change is
+   1 s old. The 2x floor, the display headroom (0.97), compute capacity from the pair / mid / present costs within `compute_budget` of the source
    interval, the queue capacity, the clamp reason (display / gpu / runtime / minimum) and a warning text. Exact modes
    hold their plan until a different one has been proposed 16 frames in a row. When the GPU looks too slow for 2x, one
    real pair with tiny assumed costs every 2.5 s measures it (`probe`).
@@ -181,18 +190,23 @@ Inside, in the order a tick runs:
    phase t; cuts and holds disable interpolation but keep the grid; the nearest tick to a source frame becomes its
    anchor when the output rate is a multiple of the source rate. Factor modes: mids at k / n of the interval and the
    source frame at its arrival plus the delay. The delay target (pair lookahead in exact modes + pair cost + 2 x mid
-   cost + 25 ms + burst pad, floor 60 ms, max 180 ms) sets how far ahead frames are due and moves 2 ms per frame.
+   cost + 25 ms + burst pad, floor 60 ms or 42 ms when a frame is cheap and the steady factor is 3 or less, max
+   180 ms) sets how far ahead frames are due; it drifts 0.25 ms per frame and rises 2 ms per frame only while frames
+   run late (exact modes: a whole interval). Factor-mode mids are spread over the clock's own step.
    With `low_latency` (games) the target is what the first in-between needs and no more: it is due 1/N of an
    interval after its source frame and needs the next one, so (1 - 1/N) x interval + pair + frame + present cost +
    the arrival jitter (a decaying envelope of how late frames come against the schedule clock) + burst pad, with no
    floor; it rises 2 ms per frame and falls 0.25, so the jitter it follows does not squeeze the timeline.
-5. **Presentation queue** (`queue.rs`). Bounded (24), ordered by due time; one presentation per tick; the oldest entry
+5. **Presentation queue** (`queue.rs`). Bounded (24), ordered by due time; outside the exact modes, when the output
+   rate divides the display's, a constant shift keeps the due times halfway between ticks (re-centred when they
+   drift a quarter tick off); one presentation per tick; the oldest entry
    inside the lateness contract (3 output intervals) is presented when the display can service the target, else the
    newest due. Entries before it are dropped and counted; entries due before the last presented one are stale. A
    requested mid that is not there in time shows its anchor instead (`fallback`).
 6. **Auto controller** (`control.rs`, AIMD). Drop pressure is a leaky integrator (tau 300 ms); several frames due in
    one tick count as one event; drops within 20 ms after a host stall are not charged while stalls are rarer than 4
-   per 2 s; pressure > 1.2 lowers the factor by one (by two above 3), not more often than every 500 ms; after 6 s with
+   per 2 s, and a missed vsync (a tick gap over 1.5 floors) or a single drop at the display's own rate counts as
+   such a stall; pressure > 1.2 lowers the factor by one (by two above 3), not more often than every 500 ms; after 6 s with
    pressure < 0.15 the factor recovers one step. Tick strain (ticks 1.7 x slower than the floor) adds a provisional
    one-step penalty that lifts 500 ms after the strain ends. A settle window (1200 ms, the extension's measured
    fullscreen reflow) after a mode change exempts drops. The motion-adaptive ceiling (> 45 motion units: 2, > 28: 3,

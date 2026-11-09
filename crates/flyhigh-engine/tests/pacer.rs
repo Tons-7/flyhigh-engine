@@ -244,6 +244,11 @@ fn auto_keeps_to_the_display_cadence_above_half_its_rate() {
     let trace = synth(12_000.0, 24.0, 0.3, 1.5, |_| 1000.0 / 144.0);
     let r = run(&trace, &PacerOptions { motion_adaptive: false, max_factor: 4, ..PacerOptions::default() });
     assert!(r.steady(3).iter().all(|s| s.factor == 3), "{:?}", r.steady(3));
+    // 24 fps on 120 Hz is 5x, and 5 has no divisor but 1 below it: a GPU that cannot afford x5 keeps x4, uneven,
+    // rather than stopping generation
+    let trace = synth(12_000.0, 24.0, 9.0, 3.0, |_| 1000.0 / 120.0);
+    let r = run(&trace, &PacerOptions::default());
+    assert!(r.steady(3).iter().all(|s| s.factor >= 2 && s.mids > 0), "{:?}", r.steady(3));
 }
 
 #[test]

@@ -207,6 +207,8 @@ Projects that run on the engine carry the GitHub topic
 
 - **[Framegen](https://github.com/MONZikWasTaken/Framegen)**: a browser extension that generates frames for any
   `<video>` on a page (Chrome, Firefox); the first host written on the engine's classes alone.
+- **[OpenNOW](https://github.com/OpenCloudGaming/OpenNOW)**: an open-source cloud gaming client whose frame
+  generation runs on the engine: in-betweens for the game stream in the native client.
 
 ## Weights
 

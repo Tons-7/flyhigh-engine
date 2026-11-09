@@ -5,6 +5,19 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-09
+
+### Fixed
+
+- Auto stopped generating where the even-cadence rule (0.3.3) found no even factor but x1: 24 fps on a 120 Hz display
+  (5x, a prime) before the GPU could afford x5, or on a GPU that never can. x1 is never the even choice now; such a
+  GPU keeps x4. Caught by the C, C++ and Python binding checks.
+
+### Documentation
+
+- ARCHITECTURE.md describes the 0.3.3 pacing (even cadence, the schedule clock, the delay drift, the due-time shift,
+  the missed-vsync exemption) and the scene-cut rule; the README lists OpenNOW among the projects built on the engine.
+
 ## [0.3.3] - 2026-11-09
 
 ### Fixed

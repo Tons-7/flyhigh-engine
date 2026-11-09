@@ -367,7 +367,9 @@ pub fn auto_factor(i: &AutoInputs) -> AutoPolicy {
             let motion_even = (motion_ceiling..=6).find(|f| n % f == 0).unwrap_or(motion_ceiling);
             let ceiling = gpu_factor.min(motion_even).min(6);
             let fits = |f: u32| f as f64 * i.cadence_hz <= i.display_capacity_hz * (1.0 + CADENCE_TOLERANCE);
-            if let Some(even) = (1..=ceiling).rev().find(|&f| n % f == 0 && fits(f)) {
+            // x1 is never the even choice: no in-betweens at all is worse than any uneven rate (24 fps on 120 Hz before
+            // the GPU can afford x5 would otherwise stop generating)
+            if let Some(even) = (2..=ceiling).rev().find(|&f| n % f == 0 && fits(f)) {
                 if even >= factor || factor as f64 * i.cadence_hz > i.display_hz * 0.5 {
                     factor = even;
                 }
