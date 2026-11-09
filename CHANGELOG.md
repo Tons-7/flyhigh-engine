@@ -5,6 +5,31 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-11-09
+
+### Fixed
+
+- Target and Display Hz modes put the tick nearest each source frame onto that frame wherever it stood, up to half a
+  step off its time: 23.976 fps at 60 showed phases 0, .41, .81, 1.0, 1.61 instead of 0, .4, .8, 1.2, 1.6, a shake
+  on slow pans. A tick shows the source frame only where it lands on it; Target 60 on a 24 fps pan: 60 % of the
+  pictures off pace to under 6 %.
+- Static protection broke thin lines on camera pans. In a panned flat fill (anime line art) the fill between where a
+  line is in the two frames reads unchanged in both, so the age pass held it as an overlay and the in-between's line
+  was erased there: a dotted, broken outline over the whole pan (on a user's 720p anime pan, about 2500 pixels per
+  in-between). A pixel flat in both frames now counts as changed; crosshairs, text and panel borders are held as
+  before (crosshair error 1.8 against 7.0 unprotected, unchanged).
+- The tick lock. A frame was presented on the first tick past its due time, and due times carry a few milliseconds
+  of jitter (a browser delivers a 24 fps video up to 20 ms early or late frame by frame): every crossing of a tick
+  boundary left one picture up three ticks and the next one. A frame due a whole number of ticks after the one before
+  it is now held to that many ticks, and slips one only when it runs a tick and the jitter's reach late. x5 of
+  23.976 fps on 240 Hz, a camera pan in Chrome: 4 to 7 % of the pictures off pace to 0 to 0.6 % (5 runs each); 60 fps
+  game footage 0 to 0.7 %. The due-time shift of 0.3.3 is gone with it.
+- A cold start ran Auto on the bare 10 ms cost default until the first timestamp query, a second at x4 of 24 fps
+  (uneven on 240 Hz). Auto sizes by the host's cost seeds until then.
+- The drop penalty stepped x4 down to x3 at 60 fps on 240 Hz, the uneven rate the even cadence avoids, and a run
+  that had drawn a penalty showed it for six seconds (9 to 16 % of the pictures off pace). It now steps along the even
+  factors: x4, x2, x1.
+
 ## [0.3.4] - 2026-11-09
 
 ### Fixed
