@@ -105,8 +105,11 @@ pub struct Tick {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Options)]
 #[serde(default, deny_unknown_fields)]
 pub struct PacerOptions {
-    /// How many frames to generate per source frame: a fixed factor (benchmarks and players that want exactly 2x), Auto
-    /// (as many as the display and the GPU allow, capped by motion), the display's rate, or a target rate.
+    /// How many frames to generate per source frame: a fixed factor (benchmarks and players that want exactly 2x),
+    /// Auto (as many as the display and the GPU allow, capped by motion: whole factors where the display runs at a
+    /// whole multiple of the source rate, else every tick or every nth tick of the display at its own media time,
+    /// so 24 fps on a 60 Hz display is 60 even pictures and not 48 uneven ones), the display's rate, or a target
+    /// rate.
     #[option(
         values = "Auto, Factor(n), DisplayHz, Target(fps)",
         c = "mode (0 auto, 1 factor, 2 display Hz, 3 target), factor, target_fps"
@@ -127,12 +130,12 @@ pub struct PacerOptions {
     /// are superseded, not dropped.
     #[option(values = "on, off", c = "limit_to_display (0, 1)")]
     pub limit_to_display: bool,
-    /// Display Hz mode fills the whole panel rate instead of leaving the headroom.
+    /// The exact modes use the whole rate of a host that cannot present on every tick, instead of leaving the headroom
+    /// (a display's own rate is used whole either way).
     #[option(values = "on, off", c = "fill_display (0, 1)")]
     pub fill_display: bool,
-    /// Fraction of the refresh rate the planner may use; the rest absorbs hitches. Lower on a display that drops ticks.
-    /// A display that runs at a whole multiple of the source rate is used at that rate exactly (every tick one frame),
-    /// outside low latency.
+    /// Fraction of the presentation rate Auto's factors, a capped Auto and a host with a present limit may use; the
+    /// rest absorbs hitches. A display's own rate and its whole fractions are used exactly (every tick one frame).
     #[option(values = "0.9 to 1")]
     pub display_headroom: f64,
     /// Fraction of the source interval the GPU may spend per interval; the factor is capped so the measured costs fit.
@@ -333,6 +336,11 @@ const EXACT_DELAY_MAX_MS: f64 = 2500.0;
 /// one). A change the factor in use does not force waits until Auto has asked for it `AUTO_ASK_MS` and the last change
 /// is `AUTO_HOLD_MS` old; only a factor that no longer fits gives way at once.
 const AUTO_ASK_MS: f64 = 250.0;
+/// Source frames in a row that must agree before Auto moves between factors and the exact grid (see `auto_grid_hz`).
+const AUTO_GRID_VOTES: u32 = 4;
+/// The least rate of Auto's grid as a multiple of the source rate. A factor needs twice the source rate; the grid does
+/// not: 60 fps on a 75 Hz display shows every fourth frame twice, and 75 pictures at their own media time are even.
+const AUTO_GRID_MIN_RATIO: f64 = 1.15;
 const AUTO_HOLD_MS: f64 = 1000.0;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,6 +420,8 @@ struct Prev {
     id: u32,
     /// Whether the interval ending at this frame may be interpolated.
     interpolate: bool,
+    /// How long the interval ending at this frame is on the schedule clock.
+    span_ms: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -454,6 +464,11 @@ pub struct Pacer {
     /// Since when Auto has asked for a higher (true) or a lower factor than the one in use.
     auto_candidate: Option<(bool, f64)>,
     auto_changed_at: f64,
+    /// Auto runs on the exact grid (see `auto_grid_hz`).
+    auto_exact: bool,
+    auto_exact_votes: u32,
+    /// The latest time any event carried: what the report's `settle_active` is judged at before the first tick.
+    seen: f64,
     last_tick: Option<f64>,
     last_present_wall: f64,
     last_pts: Option<f64>,
@@ -497,6 +512,9 @@ impl Pacer {
             factor: 2,
             auto_candidate: None,
             auto_changed_at: f64::NEG_INFINITY,
+            auto_exact: false,
+            auto_exact_votes: 0,
+            seen: f64::NEG_INFINITY,
             last_tick: None,
             last_present_wall: f64::NEG_INFINITY,
             last_pts: None,
@@ -555,6 +573,7 @@ impl Pacer {
     /// exempt for `settle_ms`, the controller and the cost estimates restart.
     pub fn mode_change(&mut self, now: f64) {
         self.log(TraceEvent::ModeChange { t: now });
+        self.seen = self.seen.max(now);
         self.control.settle(now, self.opts.settle_ms);
         self.control.reset(now, &self.control_opts);
         self.mid_cost.reset();
@@ -625,7 +644,7 @@ impl Pacer {
             pressure: self.control.pressure(),
             strain_pressure: self.control.strain_pressure(),
             stall_load: self.control.stall_load(),
-            settle_active: self.last_tick.is_some_and(|t| !self.control.settled(t)),
+            settle_active: !self.control.settled(self.seen),
             delay_ms: self.delay_ms,
             late_avg_ms: self.late_avg,
             late_tail_ms: self.late_tail_ms,
@@ -717,12 +736,14 @@ impl Pacer {
     }
 
     fn presentation_target_hz(&self) -> f64 {
-        if self.opts.exact_cadence() {
+        if self.exact() {
             return self.rate.snapshot().and_then(|p| p.output_hz).unwrap_or(0.0);
         }
         // fixed factors and uncapped Auto place mids at k / n across the interval: target 0 disables recovery and
         // drops a one-vsync backlog even when the display keeps up with that rate
-        let iv = self.source.wall_ms();
+        // by the decoded cadence once it is known: the arrival average wanders (16.3 to 16.6 ms on a 60 fps video in a
+        // browser), which read x4 as 241 to 247 fps, more than a 240 Hz display has, and the backlog was dropped
+        let iv = if self.source.ready() { self.source.wall_pair_ms() } else { self.source.wall_ms() };
         if iv > 0.0 {
             self.factor.max(1) as f64 * 1000.0 / iv
         } else {
@@ -758,6 +779,7 @@ impl Pacer {
     /// The display tick: the heartbeat.
     pub fn display_tick(&mut self, now: f64) -> Tick {
         self.log(TraceEvent::Tick { t: now });
+        self.seen = self.seen.max(now);
         self.counters.ticks += 1;
         let mut sample = None;
         if let Some(last) = self.last_tick {
@@ -913,6 +935,10 @@ impl Pacer {
         let (mid, pair, present) = (self.mid_cost(), self.pair_cost(), self.present_cost.value());
         let capped = self.opts.mode == RateMode::Auto && self.opts.fps_limit.is_some();
         let mode = match (self.opts.mode, self.opts.fps_limit) {
+            (RateMode::Auto, None) if self.auto_exact => {
+                let display_hz = self.display.measure().display_hz;
+                RateMode::Target(self.auto_grid_hz().unwrap_or(display_hz))
+            }
             (RateMode::Auto, Some(limit)) => {
                 // capped Auto: the Auto policy's presentation rate, no higher than the limit
                 let requested = match source_hz {
@@ -947,6 +973,7 @@ impl Pacer {
             headroom: self.opts.display_headroom,
             compute_budget: self.opts.compute_budget,
             max_mids: self.opts.queue_capacity - 1,
+            min_ratio: if self.auto_exact { AUTO_GRID_MIN_RATIO } else { 2.0 },
         };
         let mut plan = resolve_output_rate(&inputs);
         // the GPU looks too slow for 2x: one real pair with tiny assumed costs every 2.5 s measures it, while a
@@ -1004,12 +1031,83 @@ impl Pacer {
             .is_some_and(|hz| (self.factor as f64 * hz - display_hz).abs() <= display_hz * rate::CADENCE_TOLERANCE)
     }
 
+    fn exact(&self) -> bool {
+        self.opts.exact_cadence() || self.auto_exact
+    }
+
+    /// An output rate that is the display's or a whole fraction of it, as the measured tick period has it: a grid one
+    /// part in a thousand off the ticks slips one every four seconds at 240 Hz. A rate that is a whole multiple of the
+    /// source stays as it is, so its ticks keep landing on the source frames.
+    fn on_ticks(&self, output_hz: f64) -> f64 {
+        let tick_hz = 1000.0 / self.display.period_ms();
+        let k = (tick_hz / output_hz).round();
+        let of_source = self
+            .source
+            .source_hz()
+            .is_some_and(|s| ((output_hz / s).round() * s - output_hz).abs() <= 0.005 * output_hz);
+        if !self.display.ready() || of_source || k < 1.0 || (tick_hz / k - output_hz).abs() > 0.015 * output_hz {
+            output_hz
+        } else {
+            tick_hz / k
+        }
+    }
+
+    /// The exact output rate Auto runs at, or None where factors serve. Factors put in-betweens at k / n between two
+    /// frames, even on screen only when the display runs at a whole multiple of a regular source; 24 fps on a 60 Hz
+    /// display as x2 is 48 pictures a second on 60 ticks, a quarter of them held twice. There Auto takes the grid in
+    /// media time instead: the display's rate, or the whole fraction of it that the GPU, the motion and the drop
+    /// penalty leave, down to 1.15 times the source. A host that cannot present on every tick keeps the factors.
+    fn auto_grid_hz(&self) -> Option<f64> {
+        let source_hz = self.source.source_hz()?;
+        let d = self.display.measure();
+        if !d.measured || d.capacity_hz < d.display_hz * 0.97 {
+            return None;
+        }
+        if self.source.regular() && rate::display_multiple(source_hz, d.display_hz).is_some() {
+            return None;
+        }
+        let interval = 1000.0 / source_hz;
+        let by_gpu = 1.0 + ((0.85 * interval - self.pair_cost()) / self.mid_cost().max(0.01)).max(0.0);
+        let by_motion = if !self.opts.motion_adaptive {
+            f64::INFINITY
+        } else if self.motion_avg > 45.0 {
+            2.5
+        } else if self.motion_avg > 28.0 {
+            3.75
+        } else if self.motion_avg > 16.0 {
+            5.0
+        } else {
+            f64::INFINITY
+        };
+        let limit = by_gpu.min(by_motion).min(self.opts.max_factor as f64 + 1.0);
+        let least = AUTO_GRID_MIN_RATIO * source_hz;
+        let rates: Vec<f64> = (1..=8).map(|k| d.display_hz / k as f64).filter(|r| *r >= least).collect();
+        let first = rates.iter().position(|r| r / source_hz <= limit).unwrap_or(rates.len().checked_sub(1)?);
+        rates.get((first + self.control.penalty() as usize).min(rates.len() - 1)).copied()
+    }
+
+    fn vote_auto_grid(&mut self) {
+        let eligible = self.opts.mode == RateMode::Auto
+            && self.opts.fps_limit.is_none()
+            && self.opts.limit_to_display
+            && !self.opts.low_latency;
+        let want = eligible && self.display.ready() && self.auto_grid_hz().is_some();
+        if want == self.auto_exact {
+            self.auto_exact_votes = 0;
+            return;
+        }
+        self.auto_exact_votes += 1;
+        if self.auto_exact_votes >= AUTO_GRID_VOTES {
+            self.auto_exact = want;
+            self.auto_exact_votes = 0;
+            self.reset_output_cadence(false);
+        }
+    }
+
     /// The factor the mode settles at regardless of motion: what the delay floor is sized for.
     fn steady_factor(&self) -> u32 {
         match self.opts.mode {
-            RateMode::Auto if !self.opts.exact_cadence() => {
-                self.auto_policy(self.source.auto_source_hz(), false).factor
-            }
+            RateMode::Auto if !self.exact() => self.auto_policy(self.source.auto_source_hz(), false).factor,
             RateMode::Factor(f) => f,
             _ => self.factor,
         }
@@ -1081,6 +1179,7 @@ impl Pacer {
     /// A source frame arrived, its interval kind known. Returns the requests that must be generated before the pair
     /// changes (leftovers of the previous pair).
     pub fn source_frame(&mut self, now: f64, frame: SourceFrame) -> Vec<Request> {
+        self.seen = self.seen.max(now);
         self.log(TraceEvent::Source {
             t: now,
             id: frame.id,
@@ -1121,7 +1220,8 @@ impl Pacer {
         // factors drop their early mids as stale; it follows its target at 2 ms per frame (a whole interval in
         // exact modes, where it also carries the pair lookahead)
         let wall_pair = self.source.wall_pair_ms();
-        let exact = self.opts.exact_cadence();
+        self.vote_auto_grid();
+        let exact = self.exact();
         let burst_pad = ((self.late_avg - 4.0) * 2.0).max((self.late_tail_ms - 8.0) * 2.0).clamp(0.0, 60.0);
         let lookahead = if self.opts.lookahead { wall_pair.min(120.0) } else { 0.0 };
         let measured_mid = self.mid_cost.value();
@@ -1171,7 +1271,13 @@ impl Pacer {
         // in-betweens are spread over the step the clock took, the spacing of the source frames around them: the
         // arrival average differs from it by up to a millisecond, and at x4 on 240 Hz that piled the frames up against
         // the ticks until one was dropped every second or two
-        let interval = if exact { wall_pair } else { self.source.sched_step_ms().unwrap_or(self.source.wall_ms()) };
+        // on the exact grid a pair is as long as its timestamps say: a source that skips frames (a browser at 1.5x
+        // delivers steps of one and two) gets in-betweens by media time, not as though every pair were the average
+        let interval = if exact {
+            pts_step.filter(|d| *d > 0.5 && *d < 500.0).unwrap_or(wall_pair)
+        } else {
+            self.source.sched_step_ms().unwrap_or(self.source.wall_ms())
+        };
         let start_at = sched_t - interval + self.delay_ms;
         let plan = if exact { Some(self.rate_plan(now)) } else { None };
         let cadence_mode = plan.as_ref().is_some_and(|p| p.interpolation_allowed);
@@ -1193,7 +1299,7 @@ impl Pacer {
             IntervalKind::Hold => self.counters.holds += 1,
             IntervalKind::Motion => self.source.note_unique(now),
         }
-        let cur = Prev { id: frame.id, interpolate: frame.kind == IntervalKind::Motion };
+        let cur = Prev { id: frame.id, interpolate: frame.kind == IntervalKind::Motion, span_ms: interval };
         let Some(prev) = self.prev else {
             if cadence_mode {
                 self.enqueue_source(frame.id, src_at);
@@ -1210,10 +1316,10 @@ impl Pacer {
                 self.advance(prev, cur);
                 return flush;
             };
-            let output_hz = plan.output_hz.unwrap_or(0.0);
+            let output_hz = self.on_ticks(plan.output_hz.unwrap_or(0.0));
             let interpolate = cur.interpolate && target_needs_interpolation(1000.0 / wall_pair, output_hz);
             let grid =
-                plan_source_cadence(self.grid_next_at, self.grid_phase_ms, start_at, wall_pair, output_hz, interpolate);
+                plan_source_cadence(self.grid_next_at, self.grid_phase_ms, start_at, interval, output_hz, interpolate);
             self.grid_next_at = grid.next_at;
             self.grid_phase_ms = grid.next_phase_ms;
             self.schedule_anchors(&grid.slots, prev.id, cur.id);
@@ -1274,11 +1380,14 @@ impl Pacer {
                 // the Stream's cadence logic and then replaces the queued source frame.
                 if let Some(p2) = self.prev2 {
                     if prev.interpolate {
-                        let at = sched_t - 2.0 * interval + self.delay_ms;
+                        // the pair is as long as the clock's step was when its second frame came, not as the step now:
+                        // spread over the current one, its in-betweens sat 7.2 to 9.5 ms apart at x5 and off their
+                        // frames (8 % of the pictures off pace on a pan)
+                        let at = sched_t - interval - prev.span_ms + self.delay_ms;
                         let mut requests = vec![self.request(p2.id, prev.id, 0.0, at, true, probe)];
                         for k in 1..n {
                             let t = k as f64 / n as f64;
-                            requests.push(self.request(p2.id, prev.id, t, at + t * interval, false, probe));
+                            requests.push(self.request(p2.id, prev.id, t, at + t * prev.span_ms, false, probe));
                         }
                         self.job = Some(Job { requests, next: 0 });
                     }

@@ -5,6 +5,57 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-10
+
+### Changed
+
+- Auto on a display that is not a whole multiple of the source rate runs on the exact grid: every tick of the display
+  (or every nth) shows a picture at its own media time. Factors put in-betweens at k / n between two frames, which is
+  even on screen only at whole multiples; 24 fps on a 60 Hz display as x2 was 48 pictures on 60 ticks. Pictures off
+  pace in Chrome (a 240 Hz panel presenting on every 4th or 2nd tick for 60 and 120 Hz): 24 fps on 60 Hz 25.5 % to
+  2.5 %, 25 fps on 60 Hz 20 % to 1.9 %, 50 fps on 120 Hz 20 % to 2.5 %, 25 and 50 fps on 240 Hz 17 to 40 % to 2 to
+  4 % (what remains is scene cuts). The same holds for 60 fps on 144 or 165 Hz. A display at a whole multiple keeps
+  the factors and the source frames with them; a host with a present limit below the refresh rate keeps the factors
+  too. The grid needs no doubling, so Auto also serves displays under twice the source rate (down to 1.15 times):
+  60 fps on 75 Hz, where every fourth frame was shown twice, is 75 pictures at their own time (measured as 60 fps on
+  80 Hz: 33 % off pace to 1.6 %; 50 fps on 60 Hz: 20 % to 0.9 %).
+- Display Hz mode and a target at the display's rate use the whole rate, on the measured tick period: the 97 %
+  headroom left a tick without a new frame every 33 ticks, a held picture twice a second on a 60 Hz display (a 24 fps
+  pan on 240 Hz: 1.5 to 5 % of the pictures off pace to 0.5 %). `display_headroom` remains for Auto's factors, a
+  capped Auto and a host present limit.
+
+### Fixed
+
+- A source that skips frames is paced by its timestamps. A browser playing 60 fps at 1.5x delivers two of every three
+  frames; Auto read the rate as more than the display has and generated nothing, and the exact modes gave every pair
+  the average length (50 to 75 % of the pictures off pace). Auto takes the exact grid for such a source and each
+  pair is as long as its timestamps say: 0.5 % off pace at 120 pictures a second.
+- The display's rate was measured half a percent low on a clock with 0.1 ms steps (240 Hz as 238.6), and the
+  presentation target of a factor went by the arrival average (x4 of 60 fps as 241 to 247 fps): at the display's own
+  rate the queue dropped frames it could have shown a tick later, the drops drew a penalty, and fast motion lost its
+  in-betweens for six seconds in about one run in three. The rate goes by the mean tick period and the target by the
+  decoded cadence.
+- An exact mode started generating a second after every start and seek (the first plan waited 16 frames like a
+  change of plan): at once now, 0.5 s to 0.1 s at 24 fps.
+- A seek or a change of speed threw the decoded cadence away, eight frames without in-betweens while it was
+  relearned (1.2 s after a change of speed). It is kept.
+- Video mode (the lookahead, cadence re-timing): the in-betweens of a pair were spread over the clock's step of the
+  frame after it, 7.2 to 9.5 ms apart at x5 and off their frames; they take their own pair's span (a 24 fps pan,
+  x5 on 240 Hz: 18.7 % of the pictures off pace to 2.2 %).
+- The browser `CostSampler` timed every 30th generate, and in video mode, where an interval's requests start with the
+  re-timing of a real frame, a stride over 2 or 5 requests only ever met those, which have no cost: the frame cost
+  was never measured and Auto stayed on the seed. A sample that did not land (nothing written, or refused in a settle
+  window) is taken again on the next call.
+- Stalls that a lower factor does not cure no longer cost frames. Firefox stalls its display loop 50 to 100 ms a few
+  times a second while a page element lies over the canvas, whatever is generated; the drops after the stalls drew
+  penalties down to x1 (21 pictures a second, under the video's own rate, where x5 showed 44 to 90 between the same
+  stalls). Two seconds after a step down with the stall load no lower, the penalty is lifted and the drops that
+  follow a stall count as the host's for half a minute (Firefox with the pointer over the video: 26 to 61-77
+  pictures a second). Drops without a stall are charged as before.
+- `settle_active` in the report was false before the first tick, so a host measuring its GPU costs once measured
+  inside the settle window, had the samples refused and stayed on the 10 ms seed (the reference player: x4 instead
+  of x5 in about one run in four). The report is right from the first event, and the player measures until taken.
+
 ## [0.3.5] - 2026-11-09
 
 ### Fixed
