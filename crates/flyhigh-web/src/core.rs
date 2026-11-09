@@ -270,10 +270,28 @@ impl FhEngine {
         self.inner.compiled_kernels().into_iter().map(String::from).collect()
     }
 
+    /// `{ code, entry }`: the WGSL and entry point of a kernel exactly as this device compiles it, or null for a name
+    /// that is not a kernel. Hand them to `device.createComputePipelineAsync({ layout: 'auto', compute: { module:
+    /// device.createShaderModule({ code }), entryPoint: entry } })` all at once: the browser compiles them in parallel
+    /// off the thread that composites the page (a cold site: about 0.5 s for a stream's kernels instead of about 2 s
+    /// one by one), and `precompile` and `stream` then find them in its cache.
+    #[wasm_bindgen(js_name = kernelSource)]
+    pub fn kernel_source(&self, name: String) -> Result<JsValue, JsValue> {
+        #[derive(serde::Serialize)]
+        struct Src {
+            code: String,
+            entry: &'static str,
+        }
+        match self.inner.kernel_wgsl(&name) {
+            Some((code, entry)) => to_js(&Src { code, entry }),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
     /// Compiles the named kernels not compiled yet and returns how many; unknown names are skipped. Chrome compiles in
     /// the process that composites the page and caches per site: a stream's worth at once freezes the video for about a
     /// second on a new site. Pass a few names per animation frame (awaiting `device.queue.onSubmittedWorkDone()`
-    /// between) before `stream`, which then finds them compiled.
+    /// between) before `stream`, which then finds them compiled; `kernelSource` first makes that a cache hit.
     pub fn precompile(&self, names: Vec<String>) -> u32 {
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
         self.inner.precompile(&names) as u32

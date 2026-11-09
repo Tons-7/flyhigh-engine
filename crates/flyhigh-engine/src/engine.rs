@@ -121,6 +121,11 @@ impl Engine {
         self.gpu.precompile(names)
     }
 
+    /// The WGSL and entry point of a kernel as this device compiles it (`Gpu::kernel_wgsl`).
+    pub fn kernel_wgsl(&self, name: &str) -> Option<(String, &'static str)> {
+        self.gpu.kernel_wgsl(name)
+    }
+
     pub fn report(&self) -> EngineReport {
         EngineReport {
             device: self.info(),

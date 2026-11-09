@@ -5,6 +5,24 @@ follow semantic versioning as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-09
+
+### Added
+
+- `engine.kernelSource(name)` (browser module; `Engine::kernel_wgsl` natively): the WGSL and entry point of a kernel
+  exactly as the device compiles it. A host hands them all to `createComputePipelineAsync` before opening a stream:
+  the browser compiles them in parallel, off the thread that composites the page, and the engine's own creation of
+  the same pipelines then hits the browser's cache. On a site whose shader cache is cold (Chrome, RTX 4060 Ti) the
+  start of a stream drops from 1.1-1.3 s to 0.4 s, with no frozen frame.
+
+### Fixed
+
+- Nearest-source regions (0.3.1) no longer drag still things: a pixel the two source frames agree on keeps the
+  render. A still character over a panned background (anime) had its outlines pulled along with the pan where the
+  network lost the motion; still outlines on such a scene: 30.6 to 44.7 dB against the source, the same as without
+  the regions, while fast turns keep the regions' sharpness (local contrast 0.911 against 0.909 before, 0.867 without
+  them). Exact render, realtime only (the fast render never had the regions).
+
 ## [0.3.1] - 2026-11-04
 
 ### Changed

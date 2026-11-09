@@ -2,7 +2,10 @@ enable f16;
 // Nearest-source regions, the last step: where the smoothed disagreement says the network could not follow the motion
 // (a flick), the in-between becomes the nearer source frame alone, warped by the network's own flow: one coherent
 // frame instead of the blend of two misplaced copies (fog) or a per-pixel choice (patches). Updates the render in
-// place; elsewhere the render stays as it is.
+// place; elsewhere the render stays as it is. A pixel the two source frames agree on (the still test's measure: 3 x 3
+// mean difference under 0.03) keeps the render too: a region the network lost often holds still things next to the
+// motion (a cel over a panned background, a HUD over a flick, statically protected pixels), and the nearer frame
+// warped by the lost flow dragged their outlines along with the motion.
 struct Par { H: u32, W: u32, hq: u32, wq: u32, f0: u32, fsx: f32, fsy: f32, _a: u32 };
 @group(0) @binding(0) var<storage, read> A: array<f16>;
 @group(0) @binding(1) var<storage, read> B: array<f16>;
@@ -35,7 +38,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let y0 = u32(clamp(qy0, 0, i32(pp.hq) - 1)); let y1 = u32(clamp(qy0 + 1, 0, i32(pp.hq) - 1));
     let x0 = u32(clamp(qx0, 0, i32(pp.wq) - 1)); let x1 = u32(clamp(qx0 + 1, 0, i32(pp.wq) - 1));
     let plane = pp.hq * pp.wq;
-    let k = clamp(2.0 * bil(1u, 0u, x0, x1, y0, y1, fx, fy), 0.0, 1.0);
+    var k = clamp(2.0 * bil(1u, 0u, x0, x1, y0, y1, fx, fy), 0.0, 1.0);
+    if (k <= 0.0) { return; }
+    var es = 0.0;
+    for (var dy = -1; dy <= 1; dy++) { for (var dx = -1; dx <= 1; dx++) {
+        let yy = u32(clamp(i32(y) + dy, 0, i32(pp.H) - 1)); let xx = u32(clamp(i32(x) + dx, 0, i32(pp.W) - 1));
+        for (var c: u32 = 0u; c < 3u; c = c + 1u) {
+            let i = c * pp.H * pp.W + yy * pp.W + xx;
+            es += abs(f32(A[i]) - f32(B[i]));
+        }
+    } }
+    k = k * smoothstep(0.02, 0.04, es / 27.0);
     if (k <= 0.0) { return; }
     // the nearer frame for the whole in-between; the middle (t = 0.5) goes to A
     let use_a = f32(T[0]) <= 0.52;

@@ -249,6 +249,15 @@ impl Gpu {
         p
     }
 
+    /// The WGSL and entry point `pipeline` compiles for a kernel on this device (the f32 rewrite applied on the f32
+    /// path), or None for a name that is not a kernel. A browser host can hand these to
+    /// `createComputePipelineAsync` all at once: the browser compiles them in parallel off the thread that composites
+    /// the page, and the engine's own creation of the same pipelines then finds them in its cache.
+    pub fn kernel_wgsl(&self, name: &str) -> Option<(String, &'static str)> {
+        let (src, ep) = kernel_source(kernel_name(name)?)?;
+        Some((if self.f32_mode { shader_f32(&src) } else { src }, ep))
+    }
+
     /// The kernels compiled so far on this device (`pipeline`), in no particular order.
     pub fn compiled_kernels(&self) -> Vec<&'static str> {
         self.p.borrow().keys().copied().collect()
