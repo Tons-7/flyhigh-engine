@@ -9,8 +9,7 @@ pub mod classify;
 
 pub use classify::{Classification, Classifier, Thresholds};
 
-use crate::gen_tex::{GenTex, Retime, TexMode, TexOptions};
-use crate::gmhs::{PairStats, StatsRun};
+use crate::gen_tex::{FinishedPairStats, GenTex, PendingPairStats, Retime, TexMode, TexOptions};
 use crate::gpu::readback::Readback;
 use crate::options::Options;
 use crate::warp::{Calibration, CameraWarp, WarpOptions};
@@ -405,11 +404,11 @@ impl Stream {
     }
 
     /// Video + cadence: the pending statistics readback; await `finish` and pass the result to `set_stats`.
-    pub fn take_stats(&mut self) -> Option<StatsRun> {
+    pub fn take_stats(&mut self) -> Option<PendingPairStats> {
         self.gen.take_stats()
     }
 
-    pub fn set_stats(&mut self, st: PairStats) {
+    pub fn set_stats(&mut self, st: FinishedPairStats) {
         self.gen.set_stats(st);
     }
 

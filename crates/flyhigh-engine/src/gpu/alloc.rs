@@ -1,13 +1,58 @@
 //! Tensor buffers: creation, the per-plan arena that reuses dead tensors' buffers, scratch release, memory accounting.
 
-use super::memory::{Buffer, Kind};
+use super::memory::{Buffer, Charge, Kind};
 use crate::Gpu;
+use std::collections::HashSet;
 use std::rc::Rc;
 use wgpu::util::DeviceExt;
 
 // FH_ARENA_TRACE=1: every arena decision on stderr (plan building only; a static plan never allocates afterwards)
 pub(crate) fn arena_trace() -> bool {
     std::env::var_os("FH_ARENA_TRACE").is_some()
+}
+
+#[derive(Default)]
+pub(crate) struct Workspace {
+    slots: Vec<(u64, Option<Buffer>)>,
+    allocated: Vec<Buffer>,
+    mismatch: bool,
+}
+
+impl Workspace {
+    fn reuse(&mut self, size: u64) -> Option<Buffer> {
+        if self.slots.is_empty() || self.mismatch {
+            return None;
+        }
+        match self.slots.get(self.allocated.len()) {
+            Some((len, buf)) if *len == size => buf.clone(),
+            _ => {
+                self.mismatch = true;
+                None
+            }
+        }
+    }
+
+    pub(crate) fn finish(&mut self, retained: &HashSet<*const Charge>, used: &HashSet<*const Charge>) -> bool {
+        if self.slots.is_empty() {
+            self.slots = self
+                .allocated
+                .drain(..)
+                .map(|b| {
+                    let id = Rc::as_ptr(&b.charge);
+                    (b.size(), (used.contains(&id) && !retained.contains(&id)).then_some(b))
+                })
+                .collect();
+            return true;
+        }
+        // Compare the actual liveness of this build, not just its allocation sizes.
+        let ok = !self.mismatch
+            && self.slots.len() == self.allocated.len()
+            && self.slots.iter().zip(&self.allocated).all(|((_, shared), actual)| {
+                shared.as_ref().is_none_or(|_| !retained.contains(&Rc::as_ptr(&actual.charge)))
+            });
+        self.allocated.clear();
+        ok
+    }
 }
 
 impl Gpu {
@@ -83,7 +128,16 @@ impl Gpu {
                 eprintln!("arena: alloc {size} <- new (free: {:?})", free.iter().map(|b| b.size()).collect::<Vec<_>>());
             }
         }
-        let b = self.create_tensor(size, Kind::Tensors);
+        let mut workspace = self.workspace.borrow_mut();
+        let b = workspace
+            .as_mut()
+            .and_then(|w| w.reuse(size))
+            .map(Rc::new)
+            .unwrap_or_else(|| self.create_tensor(size, Kind::Tensors));
+        if let Some(w) = workspace.as_mut() {
+            // Clone the raw handle, not Rc<Buffer>, so intra-plan last-use checks are unchanged.
+            w.allocated.push((*b).clone());
+        }
         if self.arena.borrow().is_some() {
             self.arena_ids.borrow_mut().insert(Rc::as_ptr(&b) as usize, Rc::downgrade(&b));
         }

@@ -8,6 +8,15 @@ pub enum Step {
     Compute { pipe: &'static str, bg: wgpu::BindGroup, groups: (u32, u32, u32), meta: Rc<StepMeta> },
     Copy { src: Rc<Buffer>, so: u64, dst: Rc<Buffer>, dof: u64, size: u64 },
 }
+impl Step {
+    pub(crate) fn allocations(&self) -> impl Iterator<Item = &Rc<Charge>> {
+        let (allocs, params, copies): (&[_], _, [_; 2]) = match self {
+            Self::Compute { meta, .. } => (&meta._allocations, meta.params_buffer.as_ref(), [None, None]),
+            Self::Copy { src, dst, .. } => (&[], None, [Some(&src.charge), Some(&dst.charge)]),
+        };
+        allocs.iter().chain(params.map(|p| &p.charge)).chain(copies.into_iter().flatten())
+    }
+}
 pub type OpOutput = (Tensor, Vec<Step>);
 
 /// What a compute step binds and its parameter bytes: a bind group is opaque once built, and the golden-plan tests

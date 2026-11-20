@@ -2,6 +2,7 @@
 
 use crate::gpu::memory::Buffer;
 use crate::{workgroups_2d, Gpu, LumaParams, NearKParams, NearParams, OpOutput, RenderParams, Tensor};
+use std::rc::Rc;
 
 /// What the render reads: the two source frames (plain, full resolution), the flow and visibility maps of the phase
 /// (`flow_tq`, `vis_tq`; views allowed) and the residual `R_t` (plain).
@@ -37,8 +38,11 @@ impl Gpu {
         )
     }
     pub fn render_ex(&self, i: &RenderInputs, o: &RenderOpts) -> OpOutput {
+        self.render_ex_to(i, o, None)
+    }
+    pub(crate) fn render_ex_to(&self, i: &RenderInputs, o: &RenderOpts, target: Option<&Rc<Buffer>>) -> OpOutput {
         let (a, b, ftq, vtq, rt) = (i.a, i.b, i.flow, i.vis, i.residual);
-        let out = self.alloc((3 * a.h * a.w) as usize);
+        let out = target.cloned().unwrap_or_else(|| self.alloc((3 * a.h * a.w) as usize));
         debug_assert!(a.is_plain() && b.is_plain() && rt.is_plain());
         let p = RenderParams {
             h: a.h,

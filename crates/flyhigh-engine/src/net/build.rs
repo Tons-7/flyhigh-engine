@@ -1,6 +1,7 @@
 //! Graph to plan: the build context (caches, liveness, pinning), `build`, `build_network` and the pair / mid split.
 
 use crate::gmhs;
+use crate::gpu::alloc::Workspace;
 use crate::gpu::memory::Buffer;
 use crate::model::graph::count_uses;
 use crate::model::graph::count_uses_unrolled;
@@ -9,7 +10,7 @@ use crate::{
     RenderOpts, StaticParams, Step, Tensor, TuneTable, UnaryParams,
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 // a buffer whose contents depend on the phase t (a `mul_t` scale uniform, the FiLM MLP output): `f(t)` gives the bytes
@@ -20,12 +21,28 @@ pub fn set_t(gpu: &Gpu, deps: &[PhaseDep], t: f32) {
     }
 }
 
+type PackKey = (String, u32, u32);
+
+#[derive(Default)]
+pub(crate) struct PlanResources {
+    weights: Weights,
+    pub(crate) render: Option<Rc<Buffer>>,
+    pub(crate) workspace: Option<Workspace>,
+    pub(crate) layout_mismatch: bool,
+}
+
+#[derive(Default)]
+struct Weights {
+    raw: HashMap<String, Rc<Buffer>>,
+    gemm: HashMap<PackKey, (Rc<Buffer>, u32, u32)>,
+    tap: HashMap<PackKey, (Rc<Buffer>, u32, u32, u32)>,
+}
+
 pub struct BuildCtx<'a> {
     pub gpu: &'a Gpu,
     pub blob: &'a Blob,
-    pub wcache: HashMap<String, Rc<Buffer>>,
-    pub bcache: HashMap<String, (Rc<Buffer>, u32, u32)>,
-    pub bcache4: HashMap<String, (Rc<Buffer>, u32, u32, u32)>,
+    weights: Weights,
+    render_target: Option<Rc<Buffer>>,
     pub k: u32,
     pub t: f32,
     pub hs: u32,
@@ -49,9 +66,8 @@ impl<'a> BuildCtx<'a> {
         BuildCtx {
             gpu,
             blob,
-            wcache: HashMap::new(),
-            bcache: HashMap::new(),
-            bcache4: HashMap::new(),
+            weights: Weights::default(),
+            render_target: None,
             k,
             t,
             hs,
@@ -99,27 +115,29 @@ impl<'a> BuildCtx<'a> {
 
 impl<'a> BuildCtx<'a> {
     pub fn wb(&mut self, name: &str) -> Rc<Buffer> {
-        if let Some(b) = self.wcache.get(name) {
+        if let Some(b) = self.weights.raw.get(name) {
             return b.clone();
         }
         let b = self.gpu.buf(&self.blob.weight(name));
-        self.wcache.insert(name.to_string(), b.clone());
+        self.weights.raw.insert(name.to_string(), b.clone());
         b
     }
     pub fn bbuf(&mut self, name: &str, cin: u32, cout: u32) -> (Rc<Buffer>, u32, u32) {
-        if let Some(b) = self.bcache.get(name) {
+        let key = (name.to_owned(), cin, cout);
+        if let Some(b) = self.weights.gemm.get(&key) {
             return b.clone();
         }
         let b = self.gpu.buildb(&self.blob.weight(name), cin, cout);
-        self.bcache.insert(name.to_string(), b.clone());
+        self.weights.gemm.insert(key, b.clone());
         b
     }
     pub fn bbuf_tap(&mut self, name: &str, cin: u32, cout: u32) -> (Rc<Buffer>, u32, u32, u32) {
-        if let Some(b) = self.bcache4.get(name) {
+        let key = (name.to_owned(), cin, cout);
+        if let Some(b) = self.weights.tap.get(&key) {
             return b.clone();
         }
         let b = self.gpu.buildb_tap(&self.blob.weight(name), cin, cout);
-        self.bcache4.insert(name.to_string(), b.clone());
+        self.weights.tap.insert(key, b.clone());
         b
     }
 }
@@ -346,7 +364,7 @@ pub fn build(ops: &[Value], env: &mut HashMap<String, Tensor>, plan: &mut Vec<St
             "render_pix" => {
                 let (a, b, rt) = (mat(t(env, 0), plan), mat(t(env, 1), plan), mat(t(env, 4), plan));
                 let (ftq, vtq) = (t(env, 2), t(env, 3));
-                g.render_ex(
+                g.render_ex_to(
                     &RenderInputs { a: &a, b: &b, flow: &ftq, vis: &vtq, residual: &rt },
                     &RenderOpts {
                         fsx: ftq.scale,
@@ -355,6 +373,7 @@ pub fn build(ops: &[Value], env: &mut HashMap<String, Tensor>, plan: &mut Vec<St
                         flags: cx.render_flags,
                         static_age: cx.static_age.as_ref().map(|(b, n)| (&**b, *n)),
                     },
+                    cx.render_target.as_ref().filter(|_| outs[0] == "render"),
                 )
             } // flow_tq / vis_tq may be views
             "convex_upsample" => {
@@ -506,6 +525,26 @@ pub fn build_network_ex(
     tune: Option<&TuneTable>,
     net: &NetOpts,
 ) -> (Tensor, HashMap<String, Tensor>, Vec<PhaseDep>) {
+    build_network_with(gpu, blob, ops, a, b, k, t, iw, ih, plan, plan_mid, tune, net, &mut PlanResources::default())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_network_with(
+    gpu: &Gpu,
+    blob: &Blob,
+    ops: &[Value],
+    a: &Tensor,
+    b: &Tensor,
+    k: u32,
+    t: f32,
+    iw: u32,
+    ih: u32,
+    plan: &mut Vec<Step>,
+    plan_mid: Option<&mut Vec<Step>>,
+    tune: Option<&TuneTable>,
+    net: &NetOpts,
+    resources: &mut PlanResources,
+) -> (Tensor, HashMap<String, Tensor>, Vec<PhaseDep>) {
     let (hp, wp) = (a.h, a.w);
     let (ihp, iwp) = (ih.div_ceil(32) * 32, iw.div_ceil(32) * 32);
     let internal = (iwp, ihp) != (wp, hp);
@@ -525,8 +564,11 @@ pub fn build_network_ex(
     // buffers, so stale ids let a buffer that never came from the arena enter the free list (which also made the plan's
     // buffer assignment depend on allocator luck)
     gpu.arena_ids.borrow_mut().clear();
+    let workspace_was = gpu.workspace.replace(resources.workspace.take());
     let mut env: HashMap<String, Tensor> = HashMap::new();
     let mut cx = BuildCtx::new(gpu, blob, k, t, ihp, iwp);
+    cx.weights = std::mem::take(&mut resources.weights);
+    cx.render_target = resources.render.clone();
     cx.cubic = net.cubic;
     cx.render_flags = net.render_flags();
     cx.pin(a);
@@ -617,6 +659,28 @@ pub fn build_network_ex(
             }),
         }
     }
+    let (pair_live, pair_used): (HashSet<_>, HashSet<_>) = if gpu.workspace.borrow().is_some() {
+        (
+            env.values().map(|t| Rc::as_ptr(&t.buf.charge)).collect(),
+            plan.iter().flat_map(Step::allocations).map(Rc::as_ptr).collect(),
+        )
+    } else {
+        Default::default()
+    };
+    #[cfg(test)]
+    let (retained, pair_buffers) = if net.keep_maps && std::env::var_os("FH_CADENCE_DIAGNOSTICS").is_some() {
+        let retained = env
+            .values()
+            .map(|t| &t.buf)
+            .chain([&a.buf, &b.buf])
+            .chain(static_age.iter())
+            .map(|b| Rc::as_ptr(&b.charge))
+            .collect::<std::collections::HashSet<_>>();
+        let pair = plan.iter().flat_map(Step::allocations).map(|a| (Rc::as_ptr(a), a.bytes)).collect::<HashMap<_, _>>();
+        (retained, pair)
+    } else {
+        Default::default()
+    };
     let tail: &mut Vec<Step> = match plan_mid {
         Some(pm) => {
             for v in env.values() {
@@ -647,7 +711,9 @@ pub fn build_network_ex(
         *gpu.arena.borrow_mut() = arena_was;
         gpu.arena_ids.borrow_mut().clear();
         let r = env["render"].clone();
-        return (r, env, std::mem::take(&mut cx.t_deps));
+        resources.workspace = gpu.workspace.replace(workspace_was);
+        resources.weights = cx.weights;
+        return (r, env, cx.t_deps);
     }
     if let Some(op) = rop {
         let ins = names(op, "in"); // A, B, flow_tq, vis_tq, R_t
@@ -655,7 +721,7 @@ pub fn build_network_ex(
         let (rt, s) = gpu.mat(&env[&ins[4]]);
         tail.extend(s);
         let (fsx, fsy) = (ftq.scale * wp as f32 / iwp as f32, ftq.scale * hp as f32 / ihp as f32);
-        let (o, s) = gpu.render_ex(
+        let (o, s) = gpu.render_ex_to(
             &RenderInputs { a, b, flow: &ftq, vis: &vtq, residual: &rt },
             &RenderOpts {
                 fsx,
@@ -664,6 +730,7 @@ pub fn build_network_ex(
                 flags: net.render_flags(),
                 static_age: static_age.as_deref().map(|b| (b, static_frames)),
             },
+            cx.render_target.as_ref(),
         );
         tail.extend(s);
         cx.pin(&o);
@@ -681,9 +748,45 @@ pub fn build_network_ex(
             workgroups_2d(wp, hp, 1),
         ));
     }
+    resources.workspace = gpu.workspace.replace(workspace_was);
+    if let Some(workspace) = resources.workspace.as_mut() {
+        // Only data that crosses the pair/mid boundary or feeds the GMHS stats/composite must remain pair-local.
+        let mid: HashSet<_> = tail.iter().flat_map(Step::allocations).map(Rc::as_ptr).collect();
+        let mut retained: HashSet<_> = pair_live.intersection(&mid).copied().collect();
+        retained.extend(env.get("gm_maps").map(|m| Rc::as_ptr(&m.buf.charge)));
+        let used = mid.into_iter().chain(pair_used).collect();
+        resources.layout_mismatch = !workspace.finish(&retained, &used);
+    }
+    #[cfg(test)]
+    if !retained.is_empty() {
+        let weights = cx
+            .weights
+            .raw
+            .values()
+            .chain(cx.weights.gemm.values().map(|b| &b.0))
+            .chain(cx.weights.tap.values().map(|b| &b.0))
+            .map(|b| Rc::as_ptr(&b.charge))
+            .collect::<std::collections::HashSet<_>>();
+        let mut bytes = pair_buffers;
+        bytes.extend(tail.iter().flat_map(Step::allocations).map(|a| (Rc::as_ptr(a), a.bytes)));
+        bytes.remove(&Rc::as_ptr(&gpu.zero.charge));
+        bytes.remove(&Rc::as_ptr(&gpu.ones.charge));
+        let (mut w, mut r, mut tmp) = (0, 0, 0);
+        for (id, size) in bytes {
+            if weights.contains(&id) {
+                w += size;
+            } else if retained.contains(&id) {
+                r += size;
+            } else {
+                tmp += size;
+            }
+        }
+        eprintln!("plan {wp}x{hp}: weights={w}, retained={r}, workspace={tmp}");
+    }
     gpu.remember_tune(&cx.tune);
     *gpu.arena.borrow_mut() = arena_was; // released scratch that nobody took is dropped here (VRAM freed)
     gpu.arena_ids.borrow_mut().clear();
     let r = env["render"].clone();
-    (r, env, std::mem::take(&mut cx.t_deps))
+    resources.weights = cx.weights;
+    (r, env, cx.t_deps)
 }

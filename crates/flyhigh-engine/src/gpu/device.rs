@@ -279,6 +279,7 @@ impl Gpu {
             timing: Default::default(),
             shader_compiler,
             arena: std::cell::RefCell::new(None),
+            workspace: std::cell::RefCell::new(None),
             arena_ids: std::cell::RefCell::new(HashMap::new()),
             scratch: std::cell::RefCell::new(Vec::new()),
             alloc_bytes: std::cell::Cell::new(0),

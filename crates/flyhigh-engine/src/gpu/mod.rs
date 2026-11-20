@@ -38,6 +38,7 @@ pub struct Gpu {
     // buffer arena (Some while a plan is being built): tensors whose last reader has been built release their
     // buffer here and later tensors of the same plan reuse it — a static in-order plan makes this safe
     pub arena: std::cell::RefCell<Option<Vec<Rc<Buffer>>>>,
+    pub(crate) workspace: std::cell::RefCell<Option<alloc::Workspace>>,
     // buffers that came from `alloc` (the only ones `release` takes), by address; the Weak keeps the Rc allocation
     // reserved, so a dropped buffer's address cannot be reused by a buffer that never came from the arena
     pub arena_ids: std::cell::RefCell<HashMap<usize, std::rc::Weak<Buffer>>>,

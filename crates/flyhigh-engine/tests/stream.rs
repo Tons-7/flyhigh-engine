@@ -82,7 +82,7 @@ fn memory_returns_to_baseline_after_stream_drop() {
     anime.warm_up(&e.gpu).unwrap();
     let active = core.report().memory;
     assert!(active.cadence_scratch.live_bytes > 0);
-    assert!(active.live_bytes > video_mem.live_bytes);
+    assert_eq!(active.frame_textures.live_bytes, video_mem.frame_textures.live_bytes);
     anime.reset();
     assert_eq!(core.report().memory.live_bytes, active.live_bytes);
     anime.add_input_texture(e.gpu.input_texture(W, H)).unwrap();

@@ -1,10 +1,10 @@
 //! `SessionExt`: the texture path with input / output slots, a pair plan, a mid plan and the fast render.
 
 use crate::gpu::memory::{Buffer, Charge};
+use crate::net::build::{build_network_with, PlanResources};
 use crate::ops::step::meta;
 use crate::{
-    build_network_ex, clone_step, set_t, workgroups_2d, Binding, Blob, Gpu, NetOpts, PhaseDep, StaticParams, Step,
-    Tensor, TuneTable,
+    clone_step, set_t, workgroups_2d, Binding, Blob, Gpu, NetOpts, PhaseDep, StaticParams, Step, Tensor, TuneTable,
 };
 use bytemuck::{Pod, Zeroable};
 use serde_json::Value;
@@ -79,6 +79,23 @@ impl SessionExt {
         tune: Option<&TuneTable>,
         net: &NetOpts,
     ) -> SessionExt {
+        Self::new_with(gpu, blob, ops, w, h, k, iw, ih, tune, net, &mut PlanResources::default())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with(
+        gpu: &Gpu,
+        blob: &Blob,
+        ops: &[Value],
+        w: u32,
+        h: u32,
+        k: u32,
+        iw: u32,
+        ih: u32,
+        tune: Option<&TuneTable>,
+        net: &NetOpts,
+        resources: &mut PlanResources,
+    ) -> SessionExt {
         let (hp, wp) = (h.div_ceil(32) * 32, w.div_ceil(32) * 32);
         // fast render reads the source textures directly: the full-resolution input tensors keep only their shape
         let fast_in = net.fast_render && (iw.div_ceil(32) * 32, ih.div_ceil(32) * 32) != (wp, hp);
@@ -86,8 +103,22 @@ impl SessionExt {
         let a = Tensor { buf: gpu.alloc(n), c: 3, h: hp, w: wp, c0: 0, scale: 1.0 };
         let b = Tensor { buf: gpu.alloc(n), c: 3, h: hp, w: wp, c0: 0, scale: 1.0 };
         let (mut plan_pair, mut plan_mid) = (Vec::new(), Vec::new());
-        let (render, env, t_deps) =
-            build_network_ex(gpu, blob, ops, &a, &b, k, 0.5, iw, ih, &mut plan_pair, Some(&mut plan_mid), tune, net);
+        let (render, env, t_deps) = build_network_with(
+            gpu,
+            blob,
+            ops,
+            &a,
+            &b,
+            k,
+            0.5,
+            iw,
+            ih,
+            &mut plan_pair,
+            Some(&mut plan_mid),
+            tune,
+            net,
+            resources,
+        );
         let fast = env.get("fast:ftq").map(|ftq| {
             let (ihp, iwp) = (ih.div_ceil(32) * 32, iw.div_ceil(32) * 32);
             let samp = gpu.device.create_sampler(&wgpu::SamplerDescriptor {

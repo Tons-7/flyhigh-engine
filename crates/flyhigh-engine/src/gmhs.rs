@@ -14,7 +14,8 @@
 //! an element against the global motion, which classifies a pair as a jump / hold of an element animated on 2s and
 //! gives the mask for the re-timed composite (`pair_stats`, `composite_frame`).
 use crate::gpu::memory::Buffer;
-use crate::{clone_step, workgroups_2d, Gpu, SessionExt, Step, Tensor};
+use crate::ops::step::meta;
+use crate::{clone_step, workgroups_2d, Binding, Gpu, SessionExt, Step, Tensor};
 use bytemuck::{Pod, Zeroable};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -113,8 +114,8 @@ pub struct CompP {
     pub wc: u32,
     pub sx: f32,
     pub sy: f32,
-    pub _a: u32,
-    pub _b: u32,
+    pub w: u32,
+    pub h: u32,
 }
 
 /// cost-map grid: `DS` network px per cell (the decision is smoothed over ~60 px anyway; 2 keeps the stage ~0.2 ms)
@@ -246,7 +247,6 @@ pub struct CadenceScratch {
     pub mask_b: Rc<Buffer>,
     pub trust_a: Rc<Buffer>,
     pub trust_b: Rc<Buffer>,
-    pub out: Tensor,
     pub part: Rc<Buffer>,
     steps: RefCell<HashMap<(u8, usize, usize), Vec<Step>>>,
 }
@@ -254,7 +254,6 @@ pub const STAT_WG: u32 = 32;
 const K_STATS: u8 = 0;
 const K_MASK: u8 = 1;
 const K_COMP: u8 = 2;
-const K_OUT: u8 = 3;
 const K_TRUST: u8 = 4;
 /// Model cost (box-filtered luma mismatch, 0..1) above which the transition pair's render is a guess. Measured on the
 /// tunnel clip (a disoccluded arm), walk and fence: 0.03 keeps the real drawing there with 2 to 4 % stopped steps,
@@ -268,15 +267,12 @@ impl CadenceScratch {
         let (m, _, _) = maps_of(sess)?;
         let r = &sess.render;
         let n = (r.c * r.h * r.w) as usize;
-        let out =
-            Tensor { buf: gpu.alloc_cadence((n * gpu.esize()) as u64), c: r.c, h: r.h, w: r.w, c0: 0, scale: 1.0 };
         Some(CadenceScratch {
             bg_copy: gpu.alloc_cadence((n * gpu.esize()) as u64),
             mask_a: gpu.alloc_cadence(u64::from(m.h * m.w) * 4),
             mask_b: gpu.alloc_cadence(u64::from(m.h * m.w) * 4),
             trust_a: gpu.alloc_cadence(u64::from(m.h * m.w) * 4),
             trust_b: gpu.alloc_cadence(u64::from(m.h * m.w) * 4),
-            out,
             part: gpu.alloc_cadence(u64::from(STAT_WG * 4 * 4)),
             steps: RefCell::new(HashMap::new()),
         })
@@ -443,7 +439,7 @@ pub fn composite_frame(
             ),
         ]
     }));
-    st.extend(sc.cached((K_COMP, sid(elem), 0), || {
+    st.extend(sc.cached((K_COMP, Rc::as_ptr(&elem.render.buf) as usize, slot), || {
         let cp = CompP {
             hp: bg.render.h,
             wp: bg.render.w,
@@ -451,18 +447,38 @@ pub fn composite_frame(
             wc: m.w,
             sx: iw as f32 / (bg.render.w as f32 * DS as f32),
             sy: ih as f32 / (bg.render.h as f32 * DS as f32),
-            _a: 0,
-            _b: 0,
+            w: bg.w,
+            h: bg.h,
         };
-        vec![gpu.compute_step(
-            "gm_composite",
-            &[&sc.bg_copy, &elem.render.buf, &sc.mask_a],
-            bytemuck::bytes_of(&cp),
-            &sc.out.buf,
-            workgroups_2d(bg.render.w, bg.render.h, 1),
-        )]
+        let params = bytemuck::bytes_of(&cp);
+        let uniform = gpu.buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("fh_gm_composite_params"),
+            contents: params,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let inputs = [&*sc.bg_copy, &*elem.render.buf, &*sc.mask_a];
+        let mut entries: Vec<_> = inputs
+            .iter()
+            .enumerate()
+            .map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() })
+            .collect();
+        entries.push(wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(out_view) });
+        entries.push(wgpu::BindGroupEntry { binding: 4, resource: uniform.as_entire_binding() });
+        let pipe = "gm_composite";
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &gpu.pipeline(pipe).get_bind_group_layout(0),
+            entries: &entries,
+        });
+        let mut bindings: Vec<_> = inputs.iter().map(|b| Binding::Buffer(b.size())).collect();
+        bindings.extend([Binding::Texture(bg.w, bg.h), Binding::Params]);
+        vec![Step::Compute {
+            pipe,
+            bg: bind_group,
+            groups: workgroups_2d(bg.w, bg.h, 1),
+            meta: meta(bindings, params, inputs.into_iter().chain([&uniform]), None),
+        }]
     }));
-    st.extend(sc.cached((K_OUT, slot, 0), || vec![gpu.tex_out_step(&sc.out, out_view, bg.w, bg.h, false)]));
     gpu.replay(&st);
     Ok(())
 }

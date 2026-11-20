@@ -632,14 +632,14 @@ impl FhStream {
     }
 
     /// Video + cadence: resolves when the pending pair statistics are in (await it after a push with `statsPending`,
-    /// before the interval's first `generate`).
+    /// before the interval's first `generate`). Completions after reset or history eviction are discarded.
     pub fn stats(&self) -> js_sys::Promise {
-        let run = self.inner.borrow_mut().take_stats();
+        let pending = self.inner.borrow_mut().take_stats();
         let inner = self.inner.clone();
         future_to_promise(async move {
-            if let Some(run) = run {
-                let s = run.finish().await.map_err(err)?;
-                inner.borrow_mut().set_stats(s);
+            if let Some(readback) = pending {
+                let result = readback.finish().await.map_err(err)?;
+                inner.borrow_mut().set_stats(result);
             }
             Ok(JsValue::UNDEFINED)
         })

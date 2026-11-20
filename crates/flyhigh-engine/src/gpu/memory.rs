@@ -84,6 +84,13 @@ pub(crate) struct Charge {
     pub(crate) bytes: u64,
 }
 
+#[cfg(test)]
+impl Charge {
+    pub(crate) fn is_tensor(&self) -> bool {
+        matches!(self.kind, Kind::Tensors)
+    }
+}
+
 impl Drop for Charge {
     fn drop(&mut self) {
         let state = &self.memory.0;
@@ -96,6 +103,7 @@ impl Drop for Charge {
 }
 
 /// An engine buffer. Dereferences to the underlying wgpu buffer for copies and bindings.
+#[derive(Clone)]
 pub struct Buffer {
     raw: wgpu::Buffer,
     // Plan steps share this charge without changing the arena's Rc<Buffer> liveness checks.
