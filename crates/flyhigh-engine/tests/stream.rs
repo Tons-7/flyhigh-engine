@@ -37,6 +37,26 @@ fn classification_thresholds_are_pure() {
     assert_eq!(motion.after_hold(true, &off).kind, IntervalKind::Motion);
 }
 
+#[test]
+fn a_one_way_step_is_a_flash_only_after_a_calm_pair() {
+    let th = Thresholds { cut_mean: Some(0.08), hold_mean: Some(0.0033), hold_max: 0.06, step_after_hold: false };
+    let cells = GRID.0 * GRID.1;
+    let step = Classification::from_stats(cells * 765 / 20, 400, cells, &th);
+    assert_eq!(step.kind, IntervalKind::Motion, "a mean difference of 0.05 is under the cut threshold");
+    let (onset, is_onset) = step.with_history(64, Some(0.005), false, &th);
+    assert_eq!((onset.kind, is_onset), (IntervalKind::Cut, true), "a flash after a calm pair");
+    let (clear, again) = step.with_history(64, Some(onset.mean), true, &th);
+    assert_eq!((clear.kind, again), (IntervalKind::Cut, false), "its clear frame, which starts no chain");
+    let (moving, _) = step.with_history(64, Some(0.05), false, &th);
+    assert_eq!(moving.kind, IntervalKind::Motion, "a bright shape moving fast steps tiles one way too");
+    let (after_clear, _) = step.with_history(64, Some(0.05), again, &th);
+    assert_eq!(after_clear.kind, IntervalKind::Motion);
+    assert_eq!(step.with_history(64, None, false, &th).0.kind, IntervalKind::Cut);
+    assert_eq!(step.with_history(16, Some(0.005), false, &th).0.kind, IntervalKind::Motion);
+    let off = Thresholds { cut_mean: None, ..th };
+    assert_eq!(step.with_history(64, Some(0.005), false, &off).0.kind, IntervalKind::Motion);
+}
+
 fn engine() -> Option<Engine> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("models");
     match Engine::load(&dir) {

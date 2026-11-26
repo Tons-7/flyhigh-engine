@@ -19,9 +19,14 @@ const IN_FLIGHT: usize = 3;
 const CELL_MAX: f32 = 765.0;
 const STATS_BYTES: u64 = 12;
 // A coherent tile must change brightness by at least 32 levels, with enough change across the frame to distinguish
-// a flash from a small moving highlight. Flash steps use the cut path even during continuous camera motion.
+// a flash from a small moving highlight.
 const FLASH_LUMA: u32 = 32;
 const FLASH_MEAN: f32 = 0.045;
+/// A one-direction step is a flash only after a calm pair, or as the clear frame of such a flash. A bright shape moving
+/// fast against a dark ground steps tiles one way too: in a thrown character or a swung blade the pairs before those
+/// steps differed by 0.03 to 0.09, before the flashes and cuts of the same scenes by 0.001 to 0.021. Taken for
+/// flashes they left the motion without in-betweens, 24 fps steps among 120 fps ones.
+const FLASH_CALM: f32 = 0.5 * FLASH_MEAN;
 /// A pair over the cut threshold is a cut only when the moving pair before it differed by less than this share of
 /// the threshold. A camera flick in a game is a run of large differences (on a 60 fps capture the pair before a
 /// "cut" differed by 54 to 98 against a threshold of 90), a cut a lone spike after a calm pair (1 to 35 on anime);
@@ -101,12 +106,21 @@ impl Classification {
         self
     }
 
-    fn with_history(mut self, tile_luma: u32, before: Option<f32>, th: &Thresholds) -> Self {
-        if th.cut_mean.is_some() && self.mean >= FLASH_MEAN && tile_luma >= FLASH_LUMA {
+    /// The same pair with its brightest one-direction tile step (`tile_luma`, 0..255), the mean difference of the
+    /// moving pair before it and whether that pair was a flash onset; also returns whether this pair is one.
+    pub fn with_history(
+        mut self,
+        tile_luma: u32,
+        before: Option<f32>,
+        onset_before: bool,
+        th: &Thresholds,
+    ) -> (Self, bool) {
+        let calm = before.is_none_or(|b| b < FLASH_CALM);
+        if th.cut_mean.is_some() && self.mean >= FLASH_MEAN && tile_luma >= FLASH_LUMA && (calm || onset_before) {
             self.kind = IntervalKind::Cut;
-            self
+            (self, calm)
         } else {
-            self.after(before, th)
+            (self.after(before, th), false)
         }
     }
 }
@@ -121,6 +135,7 @@ pub struct Classifier {
     /// The mean difference of the last pair that was not a hold, as its readback landed.
     last_moving: Rc<Cell<Option<f32>>>,
     last_held: Rc<Cell<bool>>,
+    last_onset: Rc<Cell<bool>>,
 }
 
 impl Classifier {
@@ -162,6 +177,7 @@ impl Classifier {
             thresholds,
             last_moving: Rc::new(Cell::new(None)),
             last_held: Rc::new(Cell::new(false)),
+            last_onset: Rc::new(Cell::new(false)),
         }
     }
 
@@ -209,11 +225,18 @@ impl Classifier {
         let cells = GRID.0 * GRID.1;
         let last_moving = self.last_moving.clone();
         let last_held = self.last_held.clone();
+        let last_onset = self.last_onset.clone();
         Some(Readback::tracked(
             &stage,
             Box::new(move |d: &[u8]| {
                 let s: &[u32] = bytemuck::cast_slice(&d[..STATS_BYTES as usize]);
-                let c = Classification::from_stats(s[0], s[1], cells, &th).with_history(s[2], last_moving.get(), &th);
+                let (c, onset) = Classification::from_stats(s[0], s[1], cells, &th).with_history(
+                    s[2],
+                    last_moving.get(),
+                    last_onset.get(),
+                    &th,
+                );
+                last_onset.set(onset);
                 let held = c.kind == IntervalKind::Hold;
                 if !held {
                     last_moving.set(Some(c.mean));
@@ -235,5 +258,6 @@ impl Classifier {
     pub fn forget_history(&self) {
         self.last_held.set(false);
         self.last_moving.set(None);
+        self.last_onset.set(false);
     }
 }
